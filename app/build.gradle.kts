@@ -1,7 +1,11 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlinx.serialization)
+
 }
 
 android {
@@ -16,6 +20,14 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+
+        // Load properties from local.properties
+        val localProps = Properties().apply {
+            load(rootProject.file("local.properties").inputStream())
+        }
+        buildConfigField("String", "SUPABASE_URL", "\"${localProps.getProperty("SUPABASE_URL")}\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${localProps.getProperty("SUPABASE_ANON_KEY")}\"")
     }
 
     buildTypes {
@@ -34,65 +46,66 @@ android {
         jvmTarget = "11"
     }
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 }
 
 dependencies {
+    // Compose BOM
+    implementation(platform(libs.androidx.compose.bom))
 
-    // Google Fonts support for Compose (e.g., Inter, Poppins)
-    implementation(libs.androidx.ui.text.google.fonts)
-
-    // Compose essentials
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.androidx.navigation.compose)
-
-    // Google Play Services - required for font provider
-    implementation(libs.play.services.base)
-
-    // (Optional) Splash screen & dynamic theming for Android 12+
-    implementation(libs.androidx.core.splashscreen)
-
-    // Koin (DI for Android + Compose)
-    implementation(libs.koin.android)
-    implementation(libs.koin.androidx.compose)
-
-// Supabase Kotlin SDK (Auth + PostgREST + Realtime + Storage)
-    implementation(libs.postgrest.kt)
+    // Supabase BOM + SDKs
+    implementation(platform(libs.supabase.bom))
     implementation(libs.auth.kt)
+    implementation(libs.postgrest.kt)
     implementation(libs.realtime.kt)
     implementation(libs.storage.kt)
     implementation(libs.gotrue.kt)
 
-// Kotlin Coroutines
-    implementation(libs.kotlinx.coroutines.android)
-
-// Kotlin Serialization
-    implementation(libs.kotlinx.serialization.json)
-
-// kotlinx-datetime (timestamp parsing, etc.)
-    implementation(libs.kotlinx.datetime)
-
-// Coil for image loading in Compose
-    implementation(libs.coil.compose)
-
-// Timber for logging
-    implementation(libs.timber)
-
-
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.lifecycle.runtime.ktx)
+    // Compose
     implementation(libs.androidx.activity.compose)
-    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.graphics)
-    implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation(libs.androidx.ui.text.google.fonts)
+    implementation(libs.androidx.ui.tooling.preview)
+    debugImplementation(libs.androidx.ui.tooling)
+
+    // Lifecycle + ViewModel
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+
+    // Koin
+    implementation(libs.koin.android)
+    implementation(libs.koin.androidx.compose)
+
+    // Kotlinx
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.datetime)
+
+    // Ktor
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.android)
+    implementation(libs.ktor.utils)
+
+    // Coil & Splash
+    implementation(libs.coil.compose)
+    implementation(libs.androidx.core.splashscreen)
+
+    // Fonts
+    implementation(libs.play.services.base)
+
+    // Logging
+    implementation(libs.timber)
+
+    // Testing
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.ui.test.junit4)
-    debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 }

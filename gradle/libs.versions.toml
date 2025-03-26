@@ -1,65 +1,106 @@
 [versions]
+# Build
 agp = "8.9.1"
-authKt = "1.4.3"
-coilCompose = "2.6.0"
-coreSplashscreen = "1.0.1"
-gotrueKt = "1.4.3"
-koinAndroid = "4.0.2"
-koinAndroidxCompose = "4.0.2"
 kotlin = "2.0.21"
+
+# Compose
+composeBom = "2025.03.00"
+activityCompose = "1.10.1"
+coilCompose = "2.7.0"
+coreSplashscreen = "1.0.1"
+
+# AndroidX
 coreKtx = "1.15.0"
+lifecycleRuntimeKtx = "2.8.7"
+lifecycleViewmodelCompose = "2.8.7"
+navigationCompose = "2.8.9"
+
+# Koin
+koinAndroid = "4.0.3"
+koinAndroidxCompose = "4.0.3"
+
+# Supabase
+supabaseBom = "3.1.0"
+supabaseModule = "3.1.0"
+gotrueKt = "2.6.1"
+
+# Kotlinx
+kotlinxCoroutinesAndroid = "1.10.1"
+kotlinxSerializationJson = "1.8.0"
+kotlinxDatetime = "0.6.2"
+
+# Google & Play Services
+playServicesBase = "18.6.0"
+
+# Testing
 junit = "4.13.2"
 junitVersion = "1.2.1"
 espressoCore = "3.6.1"
-kotlinxCoroutinesAndroid = "1.10.1"
-kotlinxDatetime = "0.6.2"
-kotlinxSerializationJson = "1.8.0"
-lifecycleRuntimeKtx = "2.8.7"
-activityCompose = "1.10.1"
-composeBom = "2024.09.00"
-lifecycleViewmodelCompose = "2.8.7"
-navigationCompose = "2.8.9"
-playServicesBase = "18.6.0"
-postgrestKt = "1.4.3"
-realtimeKt = "1.4.3"
-storageKt = "1.4.3"
+
+# Ktor
+ktorVersion = "3.1.1"
+
+# Misc
 timber = "5.0.1"
 
 [libraries]
-androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
-androidx-core-splashscreen = { module = "androidx.core:core-splashscreen", version.ref = "coreSplashscreen" }
-androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycleViewmodelCompose" }
-androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
-androidx-ui-text-google-fonts = { module = "androidx.compose.ui:ui-text-google-fonts" }
-auth-kt = { module = "io.github.jan-tennert.supabase:auth-kt", version = "3.0.3" }
-coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coilCompose" }
-gotrue-kt = { module = "io.github.jan-tennert.supabase:gotrue-kt", version.ref = "gotrueKt" }
-junit = { group = "junit", name = "junit", version.ref = "junit" }
-androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
-androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
-androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+# Compose
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
+androidx-core-splashscreen = { module = "androidx.core:core-splashscreen", version.ref = "coreSplashscreen" }
 androidx-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
-androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
-androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+androidx-ui-text-google-fonts = { module = "androidx.compose.ui:ui-text-google-fonts" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
+
+# AndroidX Core
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycleViewmodelCompose" }
+
+# Supabase BOM + Modules
+supabase-bom = { module = "io.github.jan-tennert.supabase:bom", version.ref = "supabaseBom" }
+auth-kt = { module = "io.github.jan-tennert.supabase:auth-kt", version.ref = "supabaseModule" }
+postgrest-kt = { module = "io.github.jan-tennert.supabase:postgrest-kt", version.ref = "supabaseModule" }
+realtime-kt = { module = "io.github.jan-tennert.supabase:realtime-kt", version.ref = "supabaseModule" }
+storage-kt = { module = "io.github.jan-tennert.supabase:storage-kt", version.ref = "supabaseModule" }
+gotrue-kt = { module = "io.github.jan-tennert.supabase:gotrue-kt", version.ref = "gotrueKt" }
+
+# Ktor
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktorVersion" }
+ktor-client-android = { module = "io.ktor:ktor-client-android", version.ref = "ktorVersion" }
+ktor-utils = { module = "io.ktor:ktor-utils", version.ref = "ktorVersion" }
+
+# Koin
 koin-android = { module = "io.insert-koin:koin-android", version.ref = "koinAndroid" }
 koin-androidx-compose = { module = "io.insert-koin:koin-androidx-compose", version.ref = "koinAndroidxCompose" }
+
+# Kotlinx
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinxCoroutinesAndroid" }
-kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinxDatetime" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
-play-services-base = { module = "com.google.android.gms:play-services-base", version.ref = "playServicesBase" }
-postgrest-kt = { module = "io.github.jan-tennert.supabase:postgrest-kt", version.ref = "postgrestKt" }
-realtime-kt = { module = "io.github.jan-tennert.supabase:realtime-kt", version.ref = "realtimeKt" }
-storage-kt = { module = "io.github.jan-tennert.supabase:storage-kt", version.ref = "storageKt" }
+kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinxDatetime" }
+
+# Coil
+coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coilCompose" }
+
+# Logging
 timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }
+
+# Google Play Services
+play-services-base = { module = "com.google.android.gms:play-services-base", version.ref = "playServicesBase" }
+
+# Testing
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
+androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest", version = "1.7.8" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
-
+kotlinx-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

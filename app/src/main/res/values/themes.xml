@@ -2,4 +2,8 @@
 <resources>
 
     <style name="Theme.Nodica" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.Nodica.Launcher" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- Use a simple background color with no icon or animations -->
+        <item name="android:windowBackground">@color/black</item>
+    </style>
 </resources>
