@@ -10,7 +10,13 @@ import com.jamie.nodica.features.groups.user_group.UserGroupsViewModel
 import com.jamie.nodica.features.groups.group.CreateGroupViewModel
 import com.jamie.nodica.features.groups.user_group.UserGroupUseCase
 import com.jamie.nodica.features.groups.user_group.UserGroupUseCaseImpl
+import com.jamie.nodica.features.messages.MessageRepository
+import com.jamie.nodica.features.messages.MessageUseCase
+import com.jamie.nodica.features.messages.MessageUseCaseImpl
+import com.jamie.nodica.features.messages.MessageViewModel
+import com.jamie.nodica.features.messages.SupabaseMessageRepository
 import com.jamie.nodica.features.profile.ProfileViewModel
+import com.jamie.nodica.features.profile_management.ProfileManagementViewModel
 import com.jamie.nodica.features.splash.SplashViewModel
 import com.jamie.nodica.supabase.provideSupabaseClient
 import io.github.jan.supabase.SupabaseClient
@@ -19,37 +25,58 @@ import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
 
 val appModule = module {
+    // Supabase Client
     single { provideSupabaseClient(get()) }
-    single<UserGroupUseCase> { UserGroupUseCaseImpl(get()) }
 
-
+    // Auth & Core Profile
     viewModel { AuthViewModel(get()) }
     viewModel { SplashViewModel(get()) }
-    viewModel { ProfileViewModel(get()) }
+    viewModel { ProfileViewModel(get()) } // For initial profile setup
 
-    // Group module
-    single<GroupRepository> { SupabaseGroupRepository(get()) }
-    single<GroupUseCase> { GroupUseCaseImpl(get()) }
-
-
-    // Bind GroupViewModel with a placeholder for currentUserId.
+    // Profile Management (Logged-in users only)
     viewModel {
         val client = get<SupabaseClient>()
         val userId = client.auth.currentUserOrNull()?.id
-            ?: throw Exception("User not logged in")
-        GroupViewModel(get(), currentUserId = userId)
+            ?: throw IllegalStateException("User must be logged in to access Profile Management")
+        ProfileManagementViewModel(get(), currentUserId = userId)
     }
+
+    // User Groups (Groups the user is a member of)
+    single<UserGroupUseCase> { UserGroupUseCaseImpl(get()) }
     viewModel {
         val client = get<SupabaseClient>()
         val userId = client.auth.currentUserOrNull()?.id
-            ?: throw Exception("User not logged in")
+            ?: throw IllegalStateException("User must be logged in to access User Groups")
         UserGroupsViewModel(get(), currentUserId = userId)
     }
+
+    // Group Discovery & General Group Operations
+    single<GroupRepository> { SupabaseGroupRepository(get()) }
+    single<GroupUseCase> { GroupUseCaseImpl(get()) }
     viewModel {
         val client = get<SupabaseClient>()
         val userId = client.auth.currentUserOrNull()?.id
-            ?: throw Exception("User not logged in")
+            ?: throw IllegalStateException("User must be logged in to access Group features") // Needed for join actions
+        GroupViewModel(get(), currentUserId = userId)
+    }
+
+    // Create Group
+    viewModel {
+        val client = get<SupabaseClient>()
+        val userId = client.auth.currentUserOrNull()?.id
+            ?: throw IllegalStateException("User must be logged in to create a Group")
         CreateGroupViewModel(get(), currentUserId = userId)
     }
 
+    // Messages
+    single<MessageRepository> { SupabaseMessageRepository(get()) }
+    single<MessageUseCase> { MessageUseCaseImpl(get()) }
+    viewModel { (currentUserId: String, groupId: String) -> // For dynamic parameters via parametersOf()
+        MessageViewModel(
+            messageUseCase = get(),
+            supabaseClient = provideSupabaseClient(get()),
+            currentUserId = currentUserId,
+            groupId = groupId
+        )
+    }
 }
