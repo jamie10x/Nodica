@@ -2,96 +2,173 @@
 package com.jamie.nodica.features.home
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn // Changed to LazyColumn for vertical scroll
-import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Clear // Import Clear icon
+import androidx.compose.material.icons.filled.Search // Import Search icon
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager // Import focus manager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController // Import keyboard controller
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.navigation.NavHostController // Correct import
+import androidx.navigation.NavHostController
+import com.jamie.nodica.features.groups.group.DiscoverGroupViewModel // Renamed ViewModel
 import com.jamie.nodica.features.groups.group.GroupItem
-import com.jamie.nodica.features.groups.group.GroupViewModel
-import com.jamie.nodica.features.groups.user_group.UserGroupsViewModel
-import com.jamie.nodica.features.navigation.Routes // Import Routes
+import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(outerNavController: NavHostController) { // Accept outer NavController
-    val groupViewModel: GroupViewModel = koinViewModel()
-    val groups by groupViewModel.groups.collectAsState()
+fun HomeScreen(outerNavController: NavHostController) { // Renamed outerNavController for clarity
+// Use the renamed ViewModel for discovering groups
+    val groupViewModel: DiscoverGroupViewModel = koinViewModel()
+
+    val groups by groupViewModel.filteredGroups.collectAsState() // Observe filtered groups
+    val isLoading by groupViewModel.isLoading.collectAsState()
     val error by groupViewModel.error.collectAsState()
     val searchQuery by groupViewModel.searchQuery.collectAsState()
-    val subjectQuery by groupViewModel.subjectQuery.collectAsState()
+    val tagQuery by groupViewModel.tagQuery.collectAsState() // Renamed from subjectQuery for consistency
 
-    val userGroupsViewModel: UserGroupsViewModel = koinViewModel()
-    // Fetch joined groups to determine join status
-    LaunchedEffect(Unit) {
-        userGroupsViewModel.fetchUserGroups()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+
+// Show errors (especially join errors) in a Snackbar
+    LaunchedEffect(error) {
+        error?.let {
+            scope.launch {
+                snackbarHostState.showSnackbar(
+                    message = it,
+                    duration = SnackbarDuration.Short
+                )
+                groupViewModel.clearError() // Clear error after showing
+            }
+        }
     }
-    val joinedGroupIds by userGroupsViewModel.joinedGroupIds.collectAsState()
-
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(title = { Text("Home / Group Discovery") })
+            // Use SmallTopAppBar for less intrusion if preferred
+            TopAppBar(
+                title = { Text("Discover Groups") }, // Updated title
+                // Optional: Add filter actions here later
+                // actions = { ... }
+            )
         }
     ) { padding ->
         Column(
             modifier = Modifier
                 .padding(padding)
-                .fillMaxSize() // Allow vertical scrolling if content exceeds screen
-                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .fillMaxSize()
         ) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { groupViewModel.onSearchQueryChanged(it) },
-                placeholder = { Text("Search groups by name…") }, // Updated placeholder
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            OutlinedTextField(
-                value = subjectQuery,
-                onValueChange = { groupViewModel.onSubjectQueryChanged(it) },
-                placeholder = { Text("Filter by subjects or keywords...") }, // Updated placeholder
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-
-            error?.let {
-                Text(
-                    text = "Error: $it",
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(bottom = 8.dp)
+            // Search and Filter Area
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { groupViewModel.onSearchQueryChanged(it) },
+                    label = { Text("Search by name") }, // Updated label
+                    placeholder = { Text("e.g., Calculus Study Group") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = "Search Icon"
+                        )
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { groupViewModel.onSearchQueryChanged("") }) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear Search")
+                            }
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { keyboardController?.hide() })
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = tagQuery,
+                    onValueChange = { groupViewModel.onTagQueryChanged(it) }, // Updated method name
+                    label = { Text("Filter by tag/subject") }, // Updated label
+                    placeholder = { Text("e.g., Physics, IELTS, Kotlin") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = "Filter Icon"
+                        )
+                    }, // Can use a filter icon
+                    trailingIcon = {
+                        if (tagQuery.isNotEmpty()) {
+                            IconButton(onClick = { groupViewModel.onTagQueryChanged("") }) { // Updated method name
+                                Icon(Icons.Default.Clear, contentDescription = "Clear Filter")
+                            }
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { keyboardController?.hide() })
                 )
             }
 
-            // Use LazyColumn for vertical arrangement and better performance if many groups
-            if (groups.isEmpty() && error == null) {
-                Box(modifier = Modifier.fillMaxSize().padding(top = 32.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                    Text("No groups found matching your criteria.")
-                }
-            } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(groups, key = { it.id }) { group ->
-                        GroupItem(
-                            group = group,
-                            joined = group.id in joinedGroupIds,
-                            onJoinClicked = {
-                                if (group.id in joinedGroupIds) {
-                                    // If already joined, navigate to messages
-                                    outerNavController.navigate("${Routes.MESSAGES}/${group.id}")
-                                } else {
-                                    // If not joined, perform join action
-                                    groupViewModel.joinGroup(group.id)
-                                    // Optional: Navigate immediately or wait for state update?
-                                    // Consider showing a loading/success indicator
-                                }
+            // Content Area: Loading, Empty, or List
+            Box(modifier = Modifier.weight(1f)) { // Make the list area take remaining space
+                when {
+                    // Loading State
+                    isLoading -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator()
+                        }
+                    }
+                    // Empty State (after loading, no results)
+                    groups.isEmpty() && !isLoading -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize().padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No groups found matching your criteria.\nTry broadening your search!",
+                                textAlign = TextAlign.Center,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    // Groups List
+                    else -> {
+                        LazyColumn(
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxSize() // Fill the Box
+                        ) {
+                            items(groups, key = { it.id }) { group ->
+                                GroupItem(
+                                    group = group,
+                                    // Groups here are discoverable, so 'joined' is always false initially
+                                    // The ViewModel handles filtering out already joined groups.
+                                    joined = false,
+                                    onActionClicked = {
+                                        // Join action
+                                        groupViewModel.joinGroup(group.id)
+                                        // Provide feedback (snackbar or button state change handled by VM state)
+                                    },
+                                    actionText = "Join Group" // Explicitly set action text
+                                )
                             }
-                        )
+                        }
                     }
                 }
             }

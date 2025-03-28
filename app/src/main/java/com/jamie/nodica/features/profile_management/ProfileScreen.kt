@@ -7,281 +7,246 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items // Import the correct items overload
-import androidx.compose.foundation.shape.CircleShape // For circular profile picture
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack // Added import
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip // For clipping image
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale // For image scaling
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager // To hide keyboard on save
 import androidx.compose.ui.unit.dp
-import androidx.navigation.NavHostController // Correct import
+import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import com.jamie.nodica.R // Import R for placeholder drawable
-import com.jamie.nodica.features.navigation.Routes // Import Routes for logout navigation
+import com.jamie.nodica.R // Assuming a placeholder drawable exists
+import com.jamie.nodica.features.navigation.Routes
+import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
-import kotlinx.coroutines.launch // For launching coroutines
+import timber.log.Timber
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ProfileScreen(outerNavController: NavHostController) { // Accept outer NavController
     val viewModel: ProfileManagementViewModel = koinViewModel()
     val state by viewModel.uiState.collectAsState()
-    var isEditing by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+
+// Separate UI state for edit mode control
+    var isEditing by rememberSaveable { mutableStateOf(false) }
+
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    // Image picker launcher
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        uri?.let {
-            // Let ViewModel handle file name generation
-            viewModel.uploadProfilePicture(context, uri)
+// Image picker launcher
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+        onResult = { uri: Uri? ->
+            uri?.let {
+                Timber.d("Image selected: $it")
+                viewModel.uploadProfilePicture(context, it)
+            }
         }
-    }
+    )
 
-    // Hardcoded tags for display (Ideally fetch from ViewModel/Backend)
-    val categoriesWithTags = remember {
-        mapOf(
-            "Mathematics" to listOf("Algebra", "Calculus", "Statistics"),
-            "Science" to listOf("Physics", "Biology", "Chemistry"),
-            "Languages" to listOf("English", "IELTS", "TOEFL", "Spanish"),
-            "Coding" to listOf("Kotlin", "Android", "DSA", "Java", "Python")
-            // Add more categories and tags as needed
-        )
-    }
-
-    // Show error messages in Snackbar
-    LaunchedEffect(state.error) {
-        state.error?.let { errorMsg ->
+// Handle error messages via Snackbar
+    LaunchedEffect(state.screenStatus) {
+        if (state.screenStatus is ProfileManagementStatus.Error) {
+            val errorMessage = (state.screenStatus as ProfileManagementStatus.Error).message
             scope.launch {
                 snackbarHostState.showSnackbar(
-                    message = errorMsg,
-                    duration = SnackbarDuration.Short
+                    message = errorMessage,
+                    duration = SnackbarDuration.Long
                 )
-                // Optional: Clear error in ViewModel after showing
-                // viewModel.clearError()
+                // Reset status to Idle after showing error, allowing retry/editing
+                // viewModel.updateState { copy(screenStatus = ProfileManagementStatus.Idle) }
+            }
+        } else if (state.screenStatus == ProfileManagementStatus.Success) {
+            // Show general success message if needed (though often implied by saving finishing)
+            scope.launch {
+                snackbarHostState.showSnackbar("Profile saved!", duration = SnackbarDuration.Short)
+                // Reset to Idle status after showing success
+                // viewModel.updateState { copy(screenStatus = ProfileManagementStatus.Idle) }
             }
         }
     }
 
+    // Function to handle save/edit toggle
+    fun toggleEditSave() {
+        if (isEditing) {
+            focusManager.clearFocus() // Hide keyboard before saving
+            viewModel.saveChanges() // Trigger save
+            // UI will show Saving state from ViewModel
+        }
+        // Always toggle edit mode, successful save will also exit edit mode implicitly when state updates
+        isEditing = !isEditing
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("My Profile") },
+                // Add back navigation if this isn't the root screen in this tab
+                navigationIcon = {
+                    IconButton(onClick = { outerNavController.navigateUp() }) { // Or navigate to specific route
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
                 actions = {
-                    // Toggle Edit/Save button
-                    TextButton(onClick = {
-                        if (isEditing) {
-                            viewModel.saveChanges() // Save changes when done editing
+                    // Display appropriate icon based on mode
+                    val actionIcon = if (isEditing) Icons.Default.Done else Icons.Default.Edit
+                    val actionText = if (isEditing) "Save" else "Edit"
+
+                    // Show progress indicator within the button during Saving/Uploading
+                    val isSavingOrUploading = state.screenStatus == ProfileManagementStatus.Saving ||
+                            state.screenStatus == ProfileManagementStatus.Uploading
+
+                    IconButton(
+                        onClick = { toggleEditSave() },
+                        enabled = !isSavingOrUploading // Disable during operations
+                    ) {
+                        if (isSavingOrUploading) {
+                            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(actionIcon, contentDescription = actionText)
                         }
-                        isEditing = !isEditing // Toggle edit mode
-                    }) {
-                        Text(if (isEditing) "Save" else "Edit")
                     }
                 }
             )
         }
     ) { padding ->
-        // Use LazyColumn for potentially long list of tags and profile fields
-        LazyColumn(
-            modifier = Modifier
-                .padding(padding)
-                .fillMaxSize(),
-            contentPadding = PaddingValues(16.dp), // Padding for the content
-            horizontalAlignment = Alignment.CenterHorizontally // Center profile pic
-        ) {
-            // Profile Picture Section
-            item {
-                Box(
-                    modifier = Modifier
-                        .size(120.dp)
-                        .clip(CircleShape) // Clip to circle
-                        .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape) // Add border
-                        .clickable(enabled = isEditing) { // Only clickable when editing
-                            launcher.launch("image/*") // Launch image picker
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(context)
-                            .data(state.profilePictureUrl)
-                            .crossfade(true)
-                            .error(R.drawable.ic_launcher_foreground) // Placeholder if error or null
-                            .placeholder(R.drawable.ic_launcher_foreground) // Placeholder while loading
-                            .build(),
-                        contentDescription = "Profile Picture",
-                        contentScale = ContentScale.Crop, // Crop to fit circle
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    // Optional overlay to indicate editability
-                    if (isEditing) {
-                        Box(
-                            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("Tap to change", color = Color.White)
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(24.dp)) // Space after picture
+        // Show main loading indicator only if profile hasn't loaded at all
+        if (!state.isProfileLoaded && state.screenStatus == ProfileManagementStatus.Loading) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
             }
-
-            // Editable Text Fields Section
-            item {
-                OutlinedTextField(
-                    value = state.name,
-                    onValueChange = viewModel::onNameChange,
-                    label = { Text("Name") },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = isEditing, // Enable/disable based on edit mode
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-
-            item {
-                OutlinedTextField(
-                    value = state.school,
-                    onValueChange = viewModel::onSchoolChange,
-                    label = { Text("School / Institution") }, // Consistent label
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = isEditing,
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-
-            item {
-                OutlinedTextField(
-                    value = state.goals,
-                    onValueChange = viewModel::onGoalsChange,
-                    label = { Text("Study Goals") },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp), // Min height
-                    enabled = isEditing,
-                    maxLines = 5
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-
-            item {
-                OutlinedTextField(
-                    value = state.preferredTime,
-                    onValueChange = viewModel::onTimeChange,
-                    label = { Text("Preferred Study Time") },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = isEditing,
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(24.dp)) // Space before tags
-            }
-
-            // Tags Section Header
-            item {
-                Text(
-                    "My Subjects & Interests",
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                )
-            }
-
-            // Iterate through categories and display tags with checkboxes
-            categoriesWithTags.forEach { (category, tagsInCategory) ->
-                // Category Title Item
-                item(key = "category_header_$category") { // Add a key for stability
-                    Text(
-                        category,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 4.dp)
-                    )
-                }
-
-                // Use items function for the CHUNKED list
-                items(
-                    items = tagsInCategory.chunked(2), // Pass the list of chunks
-                    key = { chunk -> "chunk_${category}_${chunk.joinToString("-")}" } // Unique key per chunk
-                ) { rowTags -> // This lambda receives one chunk (a List<String>)
-                    // Create ONE Row for the current chunk
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 2.dp), // Padding for the row
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        }
+        // Show main content if profile data is available (even if editing/saving/uploading)
+        else if (state.isProfileLoaded) {
+            Column( // Use Column instead of LazyColumn if content isn't excessively long
+                modifier = Modifier
+                    .padding(padding)
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()) // Allow scrolling
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Profile Picture Section
+                Box(contentAlignment = Alignment.Center) { // Box to overlay progress indicator
+                    Box(
+                        modifier = Modifier
+                            .size(120.dp)
+                            .clip(CircleShape)
+                            .border(2.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant) // Placeholder background
+                            .clickable(enabled = isEditing) { // Only clickable when editing
+                                imagePickerLauncher.launch("image/*") // Launch image picker
+                            },
+                        contentAlignment = Alignment.Center
                     ) {
-                        // Iterate WITHIN the chunk using standard forEach inside the Row's composable scope
-                        rowTags.forEach { tag ->
-                            // Create the UI for each individual tag (Checkbox + Text)
-                            // Apply weight here to distribute space within this Row
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .weight(1f) // Each tag container takes equal space in the row
-                                    .clickable(enabled = isEditing) { // Make the row area clickable
-                                        viewModel.toggleTag(tag)
-                                    }
-                                    .padding(vertical = 4.dp) // Padding inside the tag's row
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(state.profilePictureUrl)
+                                .crossfade(true)
+                                // Use a default vector drawable or generic icon
+                                .error(R.drawable.nodica_icon)
+                                .placeholder(R.drawable.nodica_icon) // Display while loading
+                                .build(),
+                            contentDescription = "Profile Picture",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        // Show overlay text only when editing and not uploading
+                        if (isEditing && state.screenStatus != ProfileManagementStatus.Uploading) {
+                            Box(
+                                Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Checkbox(
-                                    checked = tag in state.tags,
-                                    onCheckedChange = { viewModel.toggleTag(tag) }, // Checkbox directly toggles
-                                    enabled = isEditing
-                                )
-                                Spacer(Modifier.width(4.dp)) // Space between checkbox and text
-                                Text(tag, style = MaterialTheme.typography.bodyMedium)
+                                Text("Tap to change", color = Color.White, style = MaterialTheme.typography.bodySmall)
                             }
                         }
-                        // If the chunk has only one tag, add an empty weighted Box
-                        // to make the single tag take up half the space correctly.
-                        if (rowTags.size == 1) {
-                            Box(Modifier.weight(1f)) // Empty Box takes the other half
+                    } // End Inner Box
+                    // Show circular progress indicator over the image while uploading
+                    if (state.screenStatus == ProfileManagementStatus.Uploading) {
+                        CircularProgressIndicator(strokeWidth = 2.dp)
+                    }
+                } // End Outer Box
+
+                Spacer(modifier = Modifier.height(16.dp))
+                // Display Email (read-only)
+                Text(
+                    text = state.email,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // --- Editable Text Fields Section ---
+                OutlinedTextField(value = state.name, onValueChange = viewModel::onNameChange, label = { Text("Name") }, modifier = Modifier.fillMaxWidth(), enabled = isEditing, singleLine = true)
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(value = state.school, onValueChange = viewModel::onSchoolChange, label = { Text("School / Institution") }, modifier = Modifier.fillMaxWidth(), enabled = isEditing, singleLine = true)
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(value = state.goals, onValueChange = viewModel::onGoalsChange, label = { Text("Study Goals") }, modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp), enabled = isEditing, maxLines = 5)
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(value = state.preferredTime, onValueChange = viewModel::onTimeChange, label = { Text("Preferred Study Time") }, modifier = Modifier.fillMaxWidth(), enabled = isEditing, singleLine = true)
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // --- Tags Section ---
+                Text("My Subjects & Interests", style = MaterialTheme.typography.titleLarge, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
+                HorizontalDivider(modifier = Modifier.padding(bottom = 8.dp)) // Visual separator
+
+                if (state.availableTags.isEmpty()) {
+                    // Show placeholder if tags haven't loaded (might be covered by main loader)
+                    Text("Loading tags...")
+                } else {
+                    state.availableTags.forEach { (category, tagsInCategory) ->
+                        Text(category, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp, bottom = 8.dp))
+                        FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            tagsInCategory.forEach { tag ->
+                                FilterChip(
+                                    selected = tag.id in state.selectedTagIds,
+                                    onClick = { if (isEditing) viewModel.toggleTagSelection(tag.id) },
+                                    enabled = isEditing, // Enable/disable chip based on edit mode
+                                    label = { Text(tag.name) },
+                                    leadingIcon = if (tag.id in state.selectedTagIds) { { Icon(Icons.Filled.Done, "Selected", Modifier.size(FilterChipDefaults.IconSize)) }} else null
+                                )
+                            }
                         }
                     }
                 }
-                // TODO: Add "Add custom tag" button here if needed for profile editing
-                // item(key="add_custom_$category") { ... }
-            }
 
-            // Logout Button Section
-            item {
-                Spacer(modifier = Modifier.height(32.dp)) // More space before logout
+                // --- Logout Button Section ---
+                Spacer(modifier = Modifier.height(32.dp))
                 Button(
                     onClick = {
                         viewModel.logout {
-                            // Use outerNavController to navigate after logout
-                            // Navigate back to Onboarding or Auth screen
+                            // Navigate back to Onboarding or Auth after logout
                             outerNavController.navigate(Routes.ONBOARDING) {
-                                // Clear the entire back stack up to the root
-                                popUpTo(outerNavController.graph.startDestinationId) { // Use startDestinationId
-                                    inclusive = true
-                                }
+                                popUpTo(outerNavController.graph.startDestinationId) { inclusive = true }
                                 launchSingleTop = true
                             }
                         }
                     },
+                    // Only allow logout when not saving/uploading/editing? Or always allow? Usually always allow.
+                    // enabled = !isEditing && state.screenStatus != ProfileManagementStatus.Saving && state.screenStatus != ProfileManagementStatus.Uploading,
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Logout", color = MaterialTheme.colorScheme.onError)
                 }
                 Spacer(modifier = Modifier.height(16.dp)) // Bottom padding
-            }
-        } // End LazyColumn
-
-        // Show loading overlay if saving or uploading
-        if (state.loading && !isEditing) { // Show loading indicator only when *not* in editing mode (avoids overlay during typing)
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.3f)), // Semi-transparent overlay
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator()
-            }
+            } // End Main Content Column
         }
     } // End Scaffold
 } // End ProfileScreen Composable

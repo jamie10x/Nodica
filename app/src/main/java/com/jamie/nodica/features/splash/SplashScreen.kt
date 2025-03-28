@@ -1,9 +1,12 @@
 package com.jamie.nodica.features.splash
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.material3.CircularProgressIndicator // Added for loading indicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -28,91 +31,112 @@ fun SplashScreen(
     viewModel: SplashViewModel = koinViewModel()
 ) {
     val destinationState by viewModel.destination.collectAsState()
+    var showContent by remember { mutableStateOf(false) } // Control visibility explicitly
 
-    // Navigate when the destination is determined by the ViewModel
+// Make content visible after a short delay to allow animation
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(100) // Small delay before fade-in starts
+        showContent = true
+    }
+
+// Navigate when the destination is determined by the ViewModel
     LaunchedEffect(destinationState) {
-        Timber.d("Splash: Destination state changed to $destinationState")
         if (destinationState is SplashDestination.Navigate) {
             val route = (destinationState as SplashDestination.Navigate).route
-            Timber.d("Splash: Navigating to $route")
+            Timber.i("Splash: Navigating to destination route: $route")
+            // Add a small delay before navigation to allow users to see the splash screen briefly
+            // This delay should be shorter than the one in the ViewModel.
+            // Adjust timing based on UX preference.
+            // kotlinx.coroutines.delay(500) // Optional delay before navigating away
             navController.navigate(route) {
-                // Pop the splash screen off the back stack so user can't navigate back to it
+                // Pop the splash screen off the back stack
                 popUpTo(Routes.SPLASH) { inclusive = true }
-                // Avoid multiple instances of the destination screen
+                // Ensure only one instance of the destination screen
                 launchSingleTop = true
             }
         }
     }
 
-    // Show the splash content only while loading.
-    // Once navigation happens, this screen will leave the composition.
-    if (destinationState == SplashDestination.Loading) {
-        SplashContent()
-    } else {
-        // Optionally keep showing SplashContent briefly even during navigation
-        // Or display nothing / a placeholder while navigation transition occurs
-        // SplashContent() // Uncomment if you want to keep showing it during transition
-        Timber.d("Splash: Navigation triggered, SplashContent will recompose out.")
-    }
+// Always render the splash content container
+    SplashContent(isVisible = showContent)
 }
 
 @Composable
-private fun SplashContent() {
+private fun SplashContent(isVisible: Boolean) {
     val isPreview = LocalInspectionMode.current
 
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background) // Explicit background
             .padding(32.dp),
         contentAlignment = Alignment.Center
     ) {
-        // Use a simpler visibility check, as the screen itself handles visibility via navigation state
-        AnimatedVisibility(visible = true, enter = fadeIn(animationSpec = androidx.compose.animation.core.tween(durationMillis = 500))) {
+        AnimatedVisibility(
+            visible = isVisible,
+            enter = fadeIn(animationSpec = tween(durationMillis = 700)) // Slightly longer fade-in
+            // Optional: Add fadeOut if needed, though navigation usually handles screen removal
+            // exit = fadeOut(animationSpec = tween(durationMillis = 300))
+        ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                // In preview mode, the painter resource might not load correctly depending on setup.
-                // Using a placeholder or conditional logic might be needed for complex previews.
+                // Logo
                 if (!isPreview) {
                     Image(
                         painter = painterResource(id = R.drawable.nodica_icon), // Ensure this drawable exists
                         contentDescription = "Nodica Logo",
-                        colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onBackground),
+                        // Use onBackground for high contrast, or primary for brand color tint
+                        colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.primary),
                         modifier = Modifier
-                            .size(180.dp) // Adjusted size
-                            .padding(bottom = 24.dp) // Adjusted padding
+                            .size(150.dp) // Slightly smaller logo? Adjust as needed.
+                            .padding(bottom = 24.dp)
                     )
                 } else {
-                    // Placeholder for preview if image doesn't load
-                    Box(Modifier.size(180.dp).padding(bottom = 24.dp))
+                    // Placeholder for preview
+                    Box(Modifier.size(150.dp).padding(bottom = 24.dp))
                 }
+
+                // App Name
                 Text(
                     text = "Nodica",
-                    style = MaterialTheme.typography.displayMedium, // Adjusted style
+                    style = MaterialTheme.typography.displaySmall, // Adjust style for better fit?
                     color = MaterialTheme.colorScheme.onBackground
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(8.dp)) // Reduced space
+
+                // Tagline
                 Text(
                     text = "Connect. Learn. Grow.",
                     style = MaterialTheme.typography.titleMedium,
                     textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant // Use a slightly muted color
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(48.dp)) // More space before indicator
+
+                // Loading Indicator
+                CircularProgressIndicator(
+                    color = MaterialTheme.colorScheme.primary,
+                    strokeWidth = 3.dp
                 )
             }
         }
     }
 }
 
-@Preview(showBackground = true, backgroundColor = 0xFFF4FBF6) // Light theme preview
+// Previews remain the same
+@Preview(showBackground = true, name = "Splash Light")
 @Composable
 fun SplashScreenPreviewLight() {
     NodicaTheme(darkTheme = false) {
-        SplashContent()
+// Simulate visible state for preview
+        SplashContent(isVisible = true)
     }
 }
 
-@Preview(showBackground = true, backgroundColor = 0xFF0E1512) // Dark theme preview
+@Preview(showBackground = true, backgroundColor = 0xFF0E1512, name = "Splash Dark")
 @Composable
 fun SplashScreenPreviewDark() {
     NodicaTheme(darkTheme = true) {
-        SplashContent()
+// Simulate visible state for preview
+        SplashContent(isVisible = true)
     }
 }

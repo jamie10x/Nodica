@@ -1,327 +1,309 @@
-@file:Suppress("PropertyName") // Keep if needed for serialization keys
-
 package com.jamie.nodica.features.profile_management
 
 import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.jamie.nodica.features.profile.TagItem // Reusing TagItem from profile setup
+import com.jamie.nodica.features.profile.TagItem // Reusing definition
+// No longer need UserProfile from features.profile if UserProfileWithTagIds covers it
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.exceptions.HttpRequestException
 import io.github.jan.supabase.exceptions.RestException
+import io.github.jan.supabase.exceptions.UnknownRestException
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.storage.storage
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay // Import delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
 import timber.log.Timber
-import java.util.UUID // For generating unique file names
+import java.util.UUID
 
-// Structure to fetch user profile including related tags via the pivot table
-@Serializable
-data class UserProfileWithTags(
+// Data structure for fetching profile including their associated tag IDs
+@kotlinx.serialization.Serializable
+data class UserProfileWithTagIds(
     val id: String,
     val name: String,
-    val email: String? = null, // Include email if needed, fetched from auth or profile
-    val school: String? = null, // Renamed from 'institution' to match ProfileSetupScreen state? Ensure consistency.
-    val preferred_study_time: String? = null, // Matches DB column name
-    val study_goals: String? = null, // Matches DB column name
-    val profile_picture_url: String? = null, // Matches DB column name
-    // This field will hold linked tag data fetched via the relation 'user_tags'
-    val user_tags: List<UserTagLink> = emptyList()
+    val email: String? = null,
+    // Use SerialName to map Kotlin 'school' to DB 'institution' during decode
+    @kotlinx.serialization.SerialName("institution")
+    val school: String? = null,
+    @kotlinx.serialization.SerialName("preferred_time")
+    val preferredTime: String? = null,
+    @kotlinx.serialization.SerialName("study_goals")
+    val studyGoals: String? = null,
+    @kotlinx.serialization.SerialName("profile_picture_url")
+    val profilePictureUrl: String? = null,
+    // Maps the 'user_tags' relation, fetching only 'tag_id'
+    @kotlinx.serialization.SerialName("user_tags")
+    val userTags: List<UserTagIdLink> = emptyList()
 )
 
-// Represents the link in the 'user_tags' pivot table and embeds the 'tags' data
-@Serializable
-data class UserTagLink(
-    val user_id: String,
-    val tag_id: String,
-    // Embeds the full TagItem object from the 'tags' table relation
-    val tags: TagItem? = null
-)
+@kotlinx.serialization.Serializable
+data class UserTagIdLink(@kotlinx.serialization.SerialName("tag_id") val tagId: String)
 
 class ProfileManagementViewModel(
     private val supabase: SupabaseClient,
-    private val currentUserId: String // Assume non-nullable, injected via Koin
+    private val currentUserId: String
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(ProfileManagementUiState())
-    val uiState: StateFlow<ProfileManagementUiState> = _uiState
+    private val _uiState = MutableStateFlow(ProfileManagementScreenState(userId = currentUserId))
+    val uiState: StateFlow<ProfileManagementScreenState> = _uiState.asStateFlow()
+
+    private var originalState: ProfileManagementScreenState? = null // For detecting unsaved changes
+    private var fetchProfileJob: Job? = null
+    private var fetchTagsJob: Job? = null
 
     init {
-        fetchProfile()
+        Timber.d("ProfileManagementViewModel initialized for user $currentUserId")
+        loadInitialData()
     }
 
-    fun fetchProfile() {
-        _uiState.value = _uiState.value.copy(loading = true, error = null) // Start loading
-        viewModelScope.launch {
+    private fun loadInitialData() {
+        // Reset state to loading, clear previous data/errors
+        _uiState.update { ProfileManagementScreenState(userId = currentUserId, screenStatus = ProfileManagementStatus.Loading) }
+        originalState = null // Clear original state on reload
+        fetchProfileJob?.cancel()
+        fetchTagsJob?.cancel()
+        // Fetch profile and available tags concurrently
+        fetchProfileData()
+        fetchAvailableTags()
+    }
+
+    // Allows UI to trigger a refresh
+    fun refreshData() = loadInitialData()
+
+    private fun fetchProfileData() {
+        if (fetchProfileJob?.isActive == true) return // Prevent concurrent fetch
+        fetchProfileJob = viewModelScope.launch {
             try {
-                // Fetch profile data and related tags in one query using PostgREST relations
-                val profileWithTags = supabase.from("users")
-                    .select(Columns.raw("*, user_tags(*, tags(*))")) { // Select user, linked user_tags, and the related tag details
-                        filter { eq("id", currentUserId) }
-                        single() // Expect exactly one result for the current user
-                    }
-                    .decodeSingle<UserProfileWithTags>() // Decode into the combined data structure
-
-                // Extract just the names of the tags the user is linked to
-                val tagNames = profileWithTags.user_tags.mapNotNull { it.tags?.name }
-
-                _uiState.value = _uiState.value.copy(
-                    name = profileWithTags.name,
-                    school = profileWithTags.school.orEmpty(),
-                    preferredTime = profileWithTags.preferred_study_time.orEmpty(),
-                    goals = profileWithTags.study_goals.orEmpty(),
-                    tags = tagNames, // Update state with the list of tag names
-                    profilePictureUrl = profileWithTags.profile_picture_url,
-                    loading = false // Loading finished
+                Timber.d("Fetching profile data for user $currentUserId")
+                // FIX: Select specific columns explicitly, map `institution` to `school` via data class
+                val selectColumns = Columns.list(
+                    "id", "name", "email", "institution",
+                    "preferred_time", "study_goals", "profile_picture_url"
                 )
-                Timber.d("Profile fetched successfully for user $currentUserId")
+                val profileWithTagIds = supabase.from("users")
+                    .select(columns = Columns.raw("${selectColumns.value}, user_tags(tag_id)")) {
+                        filter { eq("id", currentUserId) }
+                        single() // Expect exactly one row
+                    }
+                    .decodeSingle<UserProfileWithTagIds>()
 
-            } catch (e: RestException) {
-                // Handle specific PostgREST errors (e.g., user not found, though unlikely if logged in)
-                Timber.e(e, "RestException fetching profile for user $currentUserId: ${e.error} - ${e.message}")
-                _uiState.value = _uiState.value.copy(error = "Error loading profile data: ${e.message}", loading = false)
-            }
-            catch (e: Exception) {
-                // Catch-all for other errors (network, serialization, etc.)
-                Timber.e(e, "Generic error fetching profile for user $currentUserId")
-                _uiState.value = _uiState.value.copy(error = "Failed to load profile: ${e.message}", loading = false)
+                // Update the state based on fetched data
+                _uiState.update { currentState ->
+                    val newState = currentState.copy(
+                        userId = profileWithTagIds.id,
+                        name = profileWithTagIds.name,
+                        school = profileWithTagIds.school.orEmpty(), // Maps from 'institution' field
+                        preferredTime = profileWithTagIds.preferredTime.orEmpty(),
+                        goals = profileWithTagIds.studyGoals.orEmpty(),
+                        email = profileWithTagIds.email ?: supabase.auth.currentUserOrNull()?.email.orEmpty(),
+                        profilePictureUrl = profileWithTagIds.profilePictureUrl,
+                        selectedTagIds = profileWithTagIds.userTags.map { it.tagId }.toSet(),
+                        // Only change status if still Loading, otherwise preserve Saving/Uploading etc.
+                        screenStatus = if (currentState.screenStatus == ProfileManagementStatus.Loading) ProfileManagementStatus.Idle else currentState.screenStatus
+                    )
+                    originalState = newState // Store initial loaded state
+                    newState
+                }
+                Timber.i("Profile data loaded successfully.")
+
+            } catch (e: Exception) {
+                val errorMessage = when (e) {
+                    is RestException -> "Error loading profile data: ${e.message}" // DB error
+                    is HttpRequestException -> "Network error loading profile." // Network error
+                    else -> "Failed to load profile data. Please try again." // Generic error
+                }
+                Timber.e(e, "Error fetching profile data for $currentUserId")
+                _uiState.update { it.copy(screenStatus = ProfileManagementStatus.Error(errorMessage)) }
             }
         }
     }
 
-    // State update functions for UI changes
+    private fun fetchAvailableTags() {
+        if (fetchTagsJob?.isActive == true) return
+        fetchTagsJob = viewModelScope.launch {
+            try {
+                Timber.d("Fetching all available tags...")
+                val tags = supabase.from("tags").select().decodeList<TagItem>()
+                val tagsByCategory = tags.groupBy { it.category }.mapValues { it.value.sortedBy { tag -> tag.name } }
+                _uiState.update { it.copy(availableTags = tagsByCategory) }
+                Timber.i("Available tags loaded successfully (${tags.size} tags).")
+            } catch (e: Exception) {
+                Timber.e(e, "Error fetching available tags.")
+                // Update status only if profile loading wasn't already in error
+                if (_uiState.value.screenStatus !is ProfileManagementStatus.Error) {
+                    // Set error only if not already in an error state from profile fetch
+                    _uiState.update { it.copy(screenStatus = ProfileManagementStatus.Error("Could not load available tags.")) }
+                }
+            }
+        }
+    }
+
+    // --- UI State Update Functions ---
     fun onNameChange(new: String) = updateState { copy(name = new) }
     fun onSchoolChange(new: String) = updateState { copy(school = new) }
     fun onTimeChange(new: String) = updateState { copy(preferredTime = new) }
     fun onGoalsChange(new: String) = updateState { copy(goals = new) }
-
-    // Toggle tag selection in the UI state
-    fun toggleTag(tag: String) = updateState {
-        val currentTags = tags.toSet() // Use a Set for efficient add/remove
-        copy(tags = if (tag in currentTags) (currentTags - tag).toList() else (currentTags + tag).toList())
+    fun toggleTagSelection(tagId: String) = updateState {
+        copy(selectedTagIds = if (tagId in selectedTagIds) selectedTagIds - tagId else selectedTagIds + tagId)
     }
 
-    // Upload profile picture to Supabase Storage
-    fun uploadProfilePicture(context: Context, uri: Uri) { // Removed fileName param, generate it internally
-        updateState { copy(loading = true, error = null) } // Indicate loading for upload
+    // --- Profile Picture Upload ---
+    fun uploadProfilePicture(context: Context, uri: Uri) {
+        val currentStatus = _uiState.value.screenStatus
+        if (currentStatus == ProfileManagementStatus.Uploading || currentStatus == ProfileManagementStatus.Saving) return
+
+        _uiState.update { it.copy(screenStatus = ProfileManagementStatus.Uploading) }
         viewModelScope.launch {
-            val fileExtension = context.contentResolver.getType(uri)?.split('/')?.lastOrNull() ?: "jpg"
-            val fileName = "profile_${UUID.randomUUID()}.$fileExtension" // Generate unique name
-            val storagePath = "$currentUserId/$fileName" // e.g., "user_uuid/profile_xyz.jpg"
+            val fileExtension = context.contentResolver.getType(uri)?.substringAfter('/') ?: "jpg"
+            val uniqueFileName = "profile_${UUID.randomUUID()}.$fileExtension"
+            val storagePath = "$currentUserId/$uniqueFileName"
 
             try {
-                val inputStream = context.contentResolver.openInputStream(uri)
-                    ?: throw Exception("Unable to open image stream from URI.")
+                val fileBytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw Exception("Could not read image data from Uri.")
 
-                // Read bytes carefully, ensuring InputStream is closed
-                val bytes = inputStream.use { it.readBytes() } // 'use' ensures closure
+                Timber.d("Uploading profile picture to path: $storagePath")
+                supabase.storage.from("profile_pictures").upload(storagePath, fileBytes) { upsert = false }
 
-                // Upload to the 'profile_pictures' bucket
-                val storageRef = supabase.storage.from("profile_pictures")
-                // Call upload with path and data, then set options in lambda
-                storageRef.upload(path = storagePath, data = bytes) {
-                    upsert = true // Set upsert option here
-                }
-                Timber.d("Profile picture uploaded to: $storagePath")
+                // Get public URL (adjust if bucket is private - needs signed URLs)
+                val publicUrl = supabase.storage.from("profile_pictures").publicUrl(storagePath)
+                Timber.i("Profile picture uploaded. Public URL: $publicUrl")
 
-                // Get the public URL of the uploaded file
-                val publicUrl = storageRef.publicUrl(path = storagePath)
-                Timber.d("Public URL obtained: $publicUrl")
+                // Update UI and save URL to DB
+                updateState { copy(profilePictureUrl = publicUrl, screenStatus = ProfileManagementStatus.Idle) }
+                saveProfilePictureUrlToDb(publicUrl)
 
-                // Update the profile picture URL in the UI state immediately
-                updateState { copy(profilePictureUrl = publicUrl, loading = false) }
-
-                // Save the URL to the user's profile in the database
-                saveProfilePictureUrl(publicUrl)
-
+            } catch (e: UnknownRestException) {
+                Timber.e(e, "Supabase Storage Error (Bucket/Policy?): ${e.message}")
+                updateState { copy(screenStatus = ProfileManagementStatus.Error("Storage error: ${e.message}")) }
+            } catch (e: HttpRequestException) {
+                Timber.e(e, "Network error uploading picture")
+                updateState { copy(screenStatus = ProfileManagementStatus.Error("Network error uploading image.")) }
             } catch (e: Exception) {
-                Timber.e(e, "Profile picture upload failed for path $storagePath")
-                updateState { copy(error = "Image upload failed: ${e.message}", loading = false) }
+                Timber.e(e, "Failed to upload profile picture")
+                updateState { copy(screenStatus = ProfileManagementStatus.Error("Image upload failed: ${e.message}")) }
             }
         }
     }
 
-    // Helper function to update only the profile picture URL in the DB
-    private suspend fun saveProfilePictureUrl(url: String?) {
+    private suspend fun saveProfilePictureUrlToDb(url: String?) {
         try {
             supabase.from("users").update(mapOf("profile_picture_url" to url)) {
                 filter { eq("id", currentUserId) }
             }
-            Timber.d("Profile picture URL saved to database.")
+            // Update original state as well so change detection works correctly after pic upload + other edits
+            originalState = originalState?.copy(profilePictureUrl = url)
+            Timber.i("Profile picture URL saved to DB.")
         } catch (e: Exception) {
             Timber.e(e, "Failed to save profile picture URL to database.")
-            // Consider reporting this error to the UI state as well
-            updateState { copy(error = "Failed to save profile picture URL: ${e.message}") }
+            // Update state to show error, URL save failed
+            _uiState.update { it.copy(screenStatus = ProfileManagementStatus.Error("Failed to update profile picture link.")) }
         }
     }
 
-
-    // Save all pending changes (name, school, goals, time, tags)
+    // --- Save All Changes ---
     fun saveChanges() {
-        _uiState.value = _uiState.value.copy(loading = true, error = null)
+        val currentState = _uiState.value
+        if (currentState.screenStatus == ProfileManagementStatus.Saving || currentState.screenStatus == ProfileManagementStatus.Uploading) return
+
+        _uiState.update { it.copy(screenStatus = ProfileManagementStatus.Saving) }
         viewModelScope.launch {
             try {
-                // 1. Update the core user profile fields (excluding tags)
+                // 1. Update User Profile Fields
                 val profileUpdates = mapOf(
-                    "name" to _uiState.value.name,
-                    "school" to _uiState.value.school.ifBlank { null },
-                    "preferred_study_time" to _uiState.value.preferredTime.ifBlank { null },
-                    "study_goals" to _uiState.value.goals.ifBlank { null },
-                    "profile_picture_url" to _uiState.value.profilePictureUrl // Ensure this is included if updated
+                    "name" to currentState.name.trim(),
+                    "institution" to currentState.school.trim().ifBlank { null }, // Map UI 'school' back to DB 'institution'
+                    "preferred_time" to currentState.preferredTime.trim().ifBlank { null },
+                    "study_goals" to currentState.goals.trim().ifBlank { null },
+                    // Make sure the picture URL currently in state is included
+                    "profile_picture_url" to currentState.profilePictureUrl
                 )
-                supabase.from("users")
-                    .update(profileUpdates) { filter { eq("id", currentUserId) } }
-                Timber.d("User profile core fields updated.")
+                supabase.from("users").update(profileUpdates) { filter { eq("id", currentUserId) } }
+                Timber.d("User profile core fields updated in DB.")
 
-                // 2. Synchronize the user's tags in the 'user_tags' pivot table
-                updateUserTags(currentUserId, _uiState.value.tags)
-                Timber.d("User tags synchronized.")
+                // 2. Synchronize User Tags
+                updateUserTagsInDb(currentState.selectedTagIds)
+                Timber.d("User tags synchronized in DB.")
 
-                // 3. Refetch profile data to confirm changes and update UI state completely
-                fetchProfile() // This will set loading = false upon completion
+                // 3. Update state to reflect success
+                val successState = currentState.copy(screenStatus = ProfileManagementStatus.Success)
+                originalState = successState // Update original state
+                _uiState.value = successState
+                Timber.i("Profile changes saved successfully.")
+
+                // Optional delay then back to Idle
+                delay(1000)
+                if (_uiState.value.screenStatus == ProfileManagementStatus.Success) {
+                    _uiState.update { it.copy(screenStatus = ProfileManagementStatus.Idle) }
+                }
 
             } catch (e: Exception) {
                 Timber.e(e, "Failed to save profile changes")
-                updateState { copy(error = "Failed to save changes: ${e.message}", loading = false) }
+                _uiState.update { it.copy(screenStatus = ProfileManagementStatus.Error("Failed to save changes: ${e.message}")) }
             }
         }
     }
 
-    // Logout the user
-    fun logout(onComplete: () -> Unit) { // Add callback for navigation
+    // Tag sync logic: Delete old, insert new. Needs transaction for full atomicity.
+    private suspend fun updateUserTagsInDb(desiredTagIds: Set<String>) {
+        Timber.d("Syncing tags for user $currentUserId. Desired: $desiredTagIds")
+        try {
+            // For simplicity, delete all then insert all.
+            // A more optimized way would fetch current IDs, calc diff, and do targeted deletes/inserts.
+            supabase.from("user_tags").delete { filter { eq("user_id", currentUserId) } }
+            Timber.v("Deleted existing tag links for user $currentUserId.")
+
+            if (desiredTagIds.isNotEmpty()) {
+                val linksToInsert = desiredTagIds.map { tagId -> mapOf("user_id" to currentUserId, "tag_id" to tagId) }
+                supabase.from("user_tags").insert(linksToInsert)
+                Timber.d("Inserted ${linksToInsert.size} new tag links for user $currentUserId.")
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "Error during DB tag update operation for $currentUserId")
+            throw Exception("Database error updating tags.", e) // Re-throw to fail the saveChanges operation
+        }
+    }
+
+
+    // --- Logout ---
+    fun logout(onComplete: () -> Unit) {
+        val currentStatus = _uiState.value.screenStatus
+        if (currentStatus == ProfileManagementStatus.Saving || currentStatus == ProfileManagementStatus.Uploading) {
+            // Prevent logout during critical operations, or handle cancellation gracefully
+            Timber.w("Logout attempted while Saving/Uploading.")
+            updateState { copy(screenStatus = ProfileManagementStatus.Error("Please wait for the current operation to finish.")) }
+            return
+        }
+
         viewModelScope.launch {
             try {
                 supabase.auth.signOut()
-                Timber.d("User logged out successfully.")
-                updateState { ProfileManagementUiState() } // Reset state after logout
-                onComplete() // Trigger navigation after successful logout
+                Timber.i("User $currentUserId logged out successfully.")
+                // Optional: Clear sensitive state if needed, though navigation usually handles this.
+                // _uiState.value = ProfileManagementScreenState() // Reset state
+                onComplete() // Trigger navigation in the UI
             } catch (e: Exception) {
                 Timber.e(e, "Logout failed")
-                updateState { copy(error = "Logout failed: ${e.message}") }
-                // Consider if onComplete should still be called or if error should block navigation
+                _uiState.update { it.copy(screenStatus = ProfileManagementStatus.Error("Logout failed: ${e.message}")) }
             }
         }
     }
 
-    // Helper to update the UI state immutably
-    private fun updateState(block: ProfileManagementUiState.() -> ProfileManagementUiState) {
-        _uiState.value = _uiState.value.block()
-    }
+    // Helper to update state immutably
+    private fun updateState(block: ProfileManagementScreenState.() -> ProfileManagementScreenState) { _uiState.update(block) }
 
-
-    /**
-     * Synchronizes the user_tags relationship based on the desired list of tag names.
-     * Fetches current tags, calculates diff, finds/creates tag IDs, and updates the pivot table.
-     */
-    private suspend fun updateUserTags(userId: String, desiredTagNames: List<String>) {
-        try {
-            // 1. Get current tag links for the user including the tag's name
-            val currentLinks = supabase.from("user_tags")
-                .select(Columns.raw("tag_id, tags!inner(name)")) { // Use !inner to ensure tag exists
-                    filter { eq("user_id", userId) }
-                }
-                .decodeList<UserTagLink>() // Decode into list of links with embedded tag name
-
-            val currentTagMap = currentLinks.mapNotNull { link -> link.tags?.name?.let { it to link.tag_id } }.toMap()
-            val currentTagNames = currentTagMap.keys.toSet() // Use Set for efficient diff
-
-            val desiredTagSet = desiredTagNames.toSet()
-
-            // 2. Determine tags to add and remove
-            val tagsToAdd = desiredTagSet - currentTagNames
-            val tagsToRemove = currentTagNames - desiredTagSet
-
-            Timber.d("Updating tags for user $userId: Add: $tagsToAdd, Remove: $tagsToRemove")
-
-            // 3. Handle additions: Find or create tag, then upsert into user_tags
-            if (tagsToAdd.isNotEmpty()) {
-                val tagsToUpsert = tagsToAdd.mapNotNull { tagName ->
-                    findOrCreateTag(tagName)?.let { tagId ->
-                        mapOf("user_id" to userId, "tag_id" to tagId)
-                    }
-                }
-                if (tagsToUpsert.isNotEmpty()) {
-                    // Use the dedicated upsert function directly on the table selector
-                    supabase.from("user_tags").upsert(tagsToUpsert) // <-- CORRECTED upsert call
-                    // Optional: Specify conflict column if default (PK) isn't right
-                    // supabase.from("user_tags").upsert(tagsToUpsert) {
-                    //    onConflict = "user_id, tag_id" // If composite PK
-                    // }
-                    Timber.d("Upserted ${tagsToUpsert.size} tag links.")
-                }
-            }
-
-            // 4. Handle removals: Delete from user_tags based on tag_id
-            if (tagsToRemove.isNotEmpty()) {
-                val tagIdsToRemove = tagsToRemove.mapNotNull { currentTagMap[it] }
-                if (tagIdsToRemove.isNotEmpty()) {
-                    supabase.from("user_tags").delete {
-                        filter {
-                            eq("user_id", userId)
-                            isIn("tag_id", tagIdsToRemove)
-                        }
-                    }
-                    Timber.d("Deleted ${tagIdsToRemove.size} tag links.")
-                }
-            }
-        } catch (e: Exception) {
-            Timber.e(e, "Error updating user tags for user $userId")
-            throw e // Re-throw to be caught by the calling function (saveChanges)
-        }
-    }
-
-    /**
-     * Finds a tag by name (case-insensitive) or creates it if it doesn't exist.
-     * Returns the tag ID or null if an error occurs.
-     */
-    private suspend fun findOrCreateTag(tagName: String): String? {
-        if (tagName.isBlank()) return null // Avoid creating blank tags
-        return try {
-            // Attempt to find existing tag (case-insensitive)
-            val existingTag = supabase.from("tags").select {
-                filter { ilike("name", tagName) } // Use ilike for case-insensitive match
-                limit(1)
-            }.decodeSingleOrNull<TagItem>()
-
-            if (existingTag != null) {
-                Timber.d("Found existing tag '$tagName' with id ${existingTag.id}")
-                existingTag.id
-            } else {
-                // Tag not found, create it (using a placeholder category for now)
-                Timber.d("Tag '$tagName' not found, creating...")
-                val insertedTag = supabase.from("tags").insert(
-                    mapOf("name" to tagName.trim(), "category" to determineCategory(tagName)) // Trim name
-                ) { select() }.decodeSingle<TagItem>() // Select to get the ID back
-                Timber.d("Created new tag '$tagName' with id ${insertedTag.id}")
-                insertedTag.id
-            }
-        } catch (e: Exception) {
-            Timber.e(e, "Error finding or creating tag: $tagName")
-            null // Return null on error
-        }
-    }
-
-    /**
-     * Dummy function to determine a tag's category based on its name.
-     * Replace with actual logic if categories are managed dynamically.
-     */
-    private fun determineCategory(tagName: String): String {
-        // Simple example logic (replace with something more robust if needed)
-        return when {
-            tagName.contains("Math", ignoreCase = true) -> "Mathematics"
-            tagName.contains("Phys", ignoreCase = true) -> "Science"
-            tagName.contains("Chem", ignoreCase = true) -> "Science"
-            tagName.contains("Bio", ignoreCase = true) -> "Science"
-            tagName.contains("Lang", ignoreCase = true) -> "Languages"
-            tagName.contains("Eng", ignoreCase = true) -> "Languages"
-            tagName.contains("Code", ignoreCase = true) -> "Coding"
-            tagName.contains("Prog", ignoreCase = true) -> "Coding"
-            else -> "General" // Default category
+    // Helper to clear error status, returning to Idle
+    fun clearErrorStatus() {
+        if (_uiState.value.screenStatus is ProfileManagementStatus.Error) {
+            _uiState.update { it.copy(screenStatus = ProfileManagementStatus.Idle) }
         }
     }
 }

@@ -72,6 +72,8 @@ dependencies {
     implementation(libs.androidx.ui.text.google.fonts)
     implementation(libs.androidx.ui.tooling.preview)
     debugImplementation(libs.androidx.ui.tooling)
+    implementation(libs.androidx.material) // Check for latest 1.x version
+
 
     // Lifecycle + ViewModel
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -97,6 +99,9 @@ dependencies {
 
     // Fonts
     implementation(libs.play.services.base)
+        implementation (libs.material3)
+        implementation (libs.androidx.material.icons.extended)
+
 
     // Logging
     implementation(libs.timber)

@@ -1,102 +1,126 @@
+// Corrected: main/java/com/jamie/nodica/features/groups/group/GroupsScreen.kt
 package com.jamie.nodica.features.groups.group
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.navigation.NavHostController // Correct import
+import androidx.navigation.NavHostController
 import com.jamie.nodica.features.groups.user_group.UserGroupsViewModel
-import com.jamie.nodica.features.navigation.Routes // Import Routes
+import com.jamie.nodica.features.navigation.Routes
+import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterialApi::class) // Keep both OptIns
 @Composable
-fun GroupsScreen(outerNavController: NavHostController) { // Accept outer NavController
-    // Retrieve the ViewModel holding the list of groups the user has joined.
+fun GroupsScreen(outerNavController: NavHostController) {
     val userGroupsViewModel: UserGroupsViewModel = koinViewModel()
-    val userGroups by userGroupsViewModel.userGroups.collectAsState()
-    val error by userGroupsViewModel.error.collectAsState()
-    // Simple loading check: assumes empty list means loading until error or data arrives
-    val isLoading = userGroups.isEmpty() && error == null
+    val uiState by userGroupsViewModel.uiState.collectAsState()
+    // Derive values directly from uiState
+    val userGroups = uiState.groups
+    val isLoading = uiState.isLoading
+    val isRefreshing = uiState.isRefreshing
+    val error = uiState.error
 
-    // Refresh the list when the screen is first composed or recomposed
-    LaunchedEffect(Unit) {
-        userGroupsViewModel.refresh()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    // Pull-to-refresh state (Ensure imports are correct)
+    val pullRefreshState = rememberPullRefreshState(
+        refreshing = isRefreshing,
+        onRefresh = { userGroupsViewModel.refresh() }
+    )
+
+    LaunchedEffect(error) {
+        error?.let { errorMessage ->
+            scope.launch {
+                snackbarHostState.showSnackbar(
+                    message = errorMessage,
+                    duration = SnackbarDuration.Long
+                )
+                userGroupsViewModel.clearError()
+            }
+        }
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(title = { Text("My Groups") })
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = {
-                // Use outerNavController to navigate to the Create Group screen
-                outerNavController.navigate(Routes.CREATE_GROUP)
-            }) {
+            FloatingActionButton(
+                onClick = { outerNavController.navigate(Routes.CREATE_GROUP) },
+                // Render FAB based on whether initial load is done and there are groups or not
+                modifier = if (isLoading && userGroups.isEmpty()) Modifier.size(0.dp) else Modifier
+            ) {
                 Icon(Icons.Default.Add, contentDescription = "Create Group")
             }
         }
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .padding(padding)
-                .fillMaxSize() // Ensure column takes full space
+                .fillMaxSize()
+                // Apply pullRefresh modifier (Ensure import is correct)
+                .pullRefresh(pullRefreshState)
         ) {
-            // Display error if loading failed
-            error?.let {
-                Text(
-                    text = "Error loading your groups: $it",
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp) // Padding for the error text
-                )
-            }
-
-            // Handle Loading and Empty states
             when {
-                isLoading && error == null -> {
-                    // Show loading indicator
+                // Initial Loading indicator
+                isLoading && userGroups.isEmpty() && !isRefreshing -> {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
                     }
                 }
-                userGroups.isEmpty() && error == null -> {
-                    // Show empty state message
+                // Empty State
+                userGroups.isEmpty() && !isLoading && !isRefreshing -> {
                     Box(modifier = Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
                         Text(
                             "You haven't joined any groups yet.\nUse the '+' button to create one or discover groups in the Home tab.",
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            style = MaterialTheme.typography.bodyLarge
+                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
+                // Groups List
                 else -> {
-                    // Display the list of joined groups
                     LazyColumn(
-                        modifier = Modifier.fillMaxSize(), // List takes remaining space
-                        verticalArrangement = Arrangement.spacedBy(12.dp), // Space between group items
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp) // Padding around the list items
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp)
                     ) {
                         items(userGroups, key = { it.id }) { group ->
                             GroupItem(
                                 group = group,
-                                joined = true, // These are groups the user is already a member of
-                                onJoinClicked = { // This action now means "Open Group Chat"
-                                    // Use outerNavController to navigate to the specific MessageScreen
+                                joined = true,
+                                onActionClicked = {
                                     outerNavController.navigate("${Routes.MESSAGES}/${group.id}")
-                                }
+                                },
+                                actionText = "Open Chat"
                             )
                         }
                     }
                 }
             }
+
+            // PullRefreshIndicator (Ensure import is correct)
+            PullRefreshIndicator(
+                refreshing = isRefreshing,
+                state = pullRefreshState,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
         }
     }
 }
