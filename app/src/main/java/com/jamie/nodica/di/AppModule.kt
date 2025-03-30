@@ -19,11 +19,13 @@ import com.jamie.nodica.features.profile.ProfileViewModel
 import com.jamie.nodica.features.profile_management.ProfileManagementViewModel
 import com.jamie.nodica.features.splash.SplashViewModel
 import com.jamie.nodica.supabase.provideSupabaseClient
+import kotlinx.coroutines.FlowPreview
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
 import timber.log.Timber
 
 
+@OptIn(FlowPreview::class)
 val appModule = module {
     // --- Supabase Client ---
     // Provided once for the entire application lifecycle.
@@ -79,7 +81,8 @@ val appModule = module {
         // Inject GroupUseCase and SupabaseClient (for userId and tag fetching)
         CreateGroupViewModel(
             groupUseCase = get(),
-            supabaseClient = get() // Inject client
+            supabaseClient = get(),
+            groupRepository = get() // Inject client
         )
     }
 

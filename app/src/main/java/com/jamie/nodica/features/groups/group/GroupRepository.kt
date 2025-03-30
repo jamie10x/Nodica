@@ -1,24 +1,29 @@
+// main/java/com/jamie/nodica/features/groups/group/GroupRepository.kt
 package com.jamie.nodica.features.groups.group
 
-// Interface definition - no changes needed here if signatures are correct.
-interface GroupRepository {
-    // Method for discovering groups
-    suspend fun fetchDiscoverGroups(
-        searchQuery: String,
-        tagQuery: String,
-        // currentUserId: String // No longer strictly needed here if filtering happens in ViewModel
-    ): List<Group>
+// Custom exception for joining when already a member
+class AlreadyJoinedException(message: String) : Exception(message)
 
-    // Method to fetch groups a specific user has joined
+/**
+ * Interface defining data operations for study groups and related entities.
+ */
+interface GroupRepository {
+
+    /** Fetches groups suitable for discovery, potentially applying filters. */
+    suspend fun fetchDiscoverGroups(searchQuery: String, tagQuery: String): List<Group>
+
+    /** Fetches the list of groups the specified user is a member of. */
     suspend fun fetchUserGroups(userId: String): List<Group>
 
-    // Method to add a user to a group
+    /** Attempts to add the specified user to the specified group. */
     suspend fun joinGroup(groupId: String, userId: String): Result<Unit>
 
-    // Method to create a new group, linking tags via RPC is preferred now
-    // This signature might change if RPC handles everything
-    suspend fun createGroup(group: Group, tagIds: List<String>): Result<Group> // Keep for now, maybe adapt later if RPC takes over fully
+    /** Creates a new group and associates the initial tags (ideally via RPC). */
+    suspend fun createGroup(group: Group, tagIds: List<String>): Result<Group>
 
-    // Method to fetch a single group's details (used after creation or for detail view)
+    /** Fetches the full details of a single group by its ID. */
     suspend fun fetchGroupById(groupId: String): Group?
+
+    /** Fetches all available tags. */
+    suspend fun fetchAllTags(): List<com.jamie.nodica.features.profile.TagItem> // Use full path if needed
 }

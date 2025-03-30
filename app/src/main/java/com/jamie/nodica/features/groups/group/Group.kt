@@ -1,22 +1,27 @@
+// main/java/com/jamie/nodica/features/groups/group/Group.kt
 package com.jamie.nodica.features.groups.group
 
+import kotlinx.datetime.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.datetime.Instant
+import kotlin.jvm.Transient // For lazy delegate
 
 // --- Helper classes for decoding relational data ---
 
+/** Helper to decode nested tag info like `tags:group_tags!inner(tags(name))` */
 @Serializable
 data class NestedTagDetails(
-    @SerialName("tags")
+    @SerialName("tags") // Adjust if query alias differs
     val tagInfo: TagNameHolder? = null
 )
 
+/** Holds the actual tag name from the nested structure */
 @Serializable
 data class TagNameHolder(
     val name: String
 )
 
+/** Helper to decode member count like `member_count:group_members(count)` */
 @Serializable
 data class MemberCountHolder(
     val count: Long
@@ -25,55 +30,46 @@ data class MemberCountHolder(
 // --- Main Group Data Class ---
 
 /**
- * Represents a study group, including relational data like tags and member count
- * fetched via Supabase queries. Designed to be immutable after creation/fetch.
- *
- * @property id Unique identifier (UUID) for the group.
- * @property name Display name of the group.
- * @property description Optional description of the group's purpose or topics.
- * @property meetingSchedule Optional text field for meeting times/days.
- * @property creatorId UUID of the user who created the group.
- * @property createdAt Timestamp of group creation.
- * @property tags List of nested structures containing tag names, decoded from relational query.
- * @property membersRelation List containing member count holder, decoded from relational query.
+ * Represents a study group.
+ * Ensure @SerialName annotations match your actual Supabase column names.
  */
 @Serializable
 data class Group(
     val id: String,
     val name: String,
-    val description: String = "", // Default to empty
+    val description: String = "",
 
     @SerialName("meeting_schedule")
     val meetingSchedule: String? = null,
 
     @SerialName("creator_id")
-    val creatorId: String? = null,
+    val creatorId: String, // Non-nullable
 
     @SerialName("created_at")
-    val createdAt: Instant? = null,
+    val createdAt: Instant, // Non-nullable
 
-    // Relational: Fetched via `tags:group_tags!inner(tags(name))`
+    // Relational Data Fields (ensure names/aliases match your queries)
     val tags: List<NestedTagDetails> = emptyList(),
 
-    // Relational: Fetched via `member_count:group_members(count)`
     @SerialName("member_count")
     val membersRelation: List<MemberCountHolder> = emptyList()
 
 ) {
     // --- Computed Properties for Convenience ---
 
-    /** Returns a sorted list of tag names associated with the group. */
-    val tagNames: List<String> by lazy { // Use lazy delegate for efficiency
+    /** Returns a sorted list of tag names. Transient avoids serialization issues. */
+    @delegate:Transient
+    val tagNames: List<String> by lazy {
         tags.mapNotNull { it.tagInfo?.name }.sorted()
     }
 
-    /** Returns the number of members in the group. */
-    val memberCount: Long by lazy { // Use lazy delegate
+    /** Returns the number of members. Transient avoids serialization issues. */
+    @delegate:Transient
+    val memberCount: Long by lazy {
         membersRelation.firstOrNull()?.count ?: 0L
     }
 
     // --- Equality based on ID ---
-
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
@@ -85,3 +81,20 @@ data class Group(
         return id.hashCode()
     }
 }
+
+
+// --- Tag Item Data Model ---
+// Defined in profile package, but shown here for context if needed
+// package com.jamie.nodica.features.profile
+// import kotlinx.datetime.Instant
+// import kotlinx.serialization.SerialName
+// import kotlinx.serialization.Serializable
+//
+// @Serializable
+// data class TagItem(
+//     val id: String,
+//     val name: String,
+//     val category: String,
+//     @SerialName("created_at")
+//     val createdAt: Instant? = null
+// )

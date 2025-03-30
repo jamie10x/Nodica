@@ -3,22 +3,23 @@ package com.jamie.nodica.features.groups.user_group
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.jamie.nodica.features.groups.group.Group
+import com.jamie.nodica.features.groups.group.Group // Correct import
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.auth
-import kotlinx.coroutines.Job // Import Job
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive // Import isActive
 import timber.log.Timber
 
-@Immutable
+@Immutable // Add Immutable for the state
 data class UserGroupsUiState(
     val groups: List<Group> = emptyList(),
-    val isLoading: Boolean = true,
-    val isRefreshing: Boolean = false,
+    val isLoading: Boolean = true,       // True for initial load attempt
+    val isRefreshing: Boolean = false,    // True only for pull-to-refresh action
     val error: String? = null
 )
 
@@ -30,18 +31,24 @@ class UserGroupsViewModel(
     private val _uiState = MutableStateFlow(UserGroupsUiState())
     val uiState: StateFlow<UserGroupsUiState> = _uiState.asStateFlow()
 
-    private var fetchJob: Job? = null // Keep track of the fetch job
+    private var fetchJob: Job? = null // Track the current fetch operation
 
-    private fun getCurrentUserIdOrSetError(): String? {
+    // Helper to get user ID and set error state if unavailable
+    private fun getCurrentUserIdOrSetError(actionDesc: String = "perform action"): String? {
         val userId = supabaseClient.auth.currentUserOrNull()?.id
         if (userId == null) {
-            Timber.e("UserGroupsViewModel: User not logged in.")
+            Timber.e("UserGroupsViewModel: User not logged in while trying to $actionDesc.")
             _uiState.update {
-                it.copy(
-                    isLoading = false, // Ensure loading stops
-                    isRefreshing = false,
-                    error = "Authentication error. Please log in again."
-                )
+                // Ensure we don't trigger update loops if already in this error state
+                if (it.error != "Authentication error.") {
+                    it.copy(
+                        isLoading = false, // Stop loading
+                        isRefreshing = false,
+                        error = "Authentication error. Please log in again."
+                    )
+                } else {
+                    it // No change needed
+                }
             }
         }
         return userId
@@ -49,89 +56,82 @@ class UserGroupsViewModel(
 
     init {
         Timber.d("UserGroupsViewModel initialized.")
-        if (getCurrentUserIdOrSetError() != null) {
-            fetchUserGroups(isRefreshing = false)
+        // Initial fetch only if user is logged in
+        if (getCurrentUserIdOrSetError("initialize ViewModel") != null) {
+            fetchUserGroups(isInitialLoad = true)
         } else {
-            _uiState.update { it.copy(isLoading = false) } // Stop loading if not logged in
+            _uiState.update { it.copy(isLoading = false) } // Set loading false if not logged in initially
         }
     }
 
-    private fun fetchUserGroups(isRefreshing: Boolean) {
-        val currentUserId = getCurrentUserIdOrSetError() ?: return
+    private fun fetchUserGroups(isInitialLoad: Boolean = false, isRefresh: Boolean = false) {
+        // 1. Get User ID or exit
+        val currentUserId = getCurrentUserIdOrSetError(if(isRefresh) "refresh groups" else "fetch groups") ?: return
 
-        // Cancel previous fetch if still running
-        fetchJob?.cancel()
-
-        // Prevent fetch if already loading and not a manual refresh action
-        if (_uiState.value.isLoading && !isRefreshing) {
-            Timber.d("Skipping fetchUserGroups; already loading.")
+        // 2. Prevent duplicate non-refresh fetches
+        if (_uiState.value.isLoading && !isRefresh && !isInitialLoad) {
+            Timber.d("fetchUserGroups skipped: Already loading and not a refresh/initial.")
             return
         }
+        // Cancel previous job if starting a new one (especially for refresh or overlapping calls)
+        fetchJob?.cancel()
 
-        Timber.d("Fetching user groups for $currentUserId... Refresh: $isRefreshing")
+        // 3. Update Loading State *Before* Launching Coroutine
         _uiState.update {
             it.copy(
-                // Show loading indicator only if it's not a background refresh
-                isLoading = !isRefreshing,
-                isRefreshing = isRefreshing,
-                error = null
+                isLoading = isInitialLoad, // True only on the very first load attempt
+                isRefreshing = isRefresh,  // True only when pull-to-refresh is triggered
+                error = null               // Clear previous errors on new attempt
             )
         }
+        Timber.d("Fetching user groups for $currentUserId. InitialLoad: $isInitialLoad, Refresh: $isRefresh")
 
-        fetchJob = viewModelScope.launch { // Assign job
-            try {
-                val result = userGroupUseCase.fetchUserGroups(currentUserId)
-                result.fold(
-                    onSuccess = { groups ->
-                        Timber.i("Successfully fetched ${groups.size} user groups.")
-                        _uiState.update {
-                            it.copy(
-                                isLoading = false, // Stop loading/refreshing
-                                isRefreshing = false,
-                                groups = groups
-                            )
-                        }
-                    },
-                    onFailure = { throwable ->
-                        Timber.e(throwable, "Error fetching user groups.")
-                        _uiState.update {
-                            it.copy(
-                                isLoading = false, // Stop loading/refreshing on failure
-                                isRefreshing = false,
-                                error = throwable.message ?: "Failed to load your groups"
-                            )
-                        }
+        // 4. Launch Coroutine for Fetching
+        fetchJob = viewModelScope.launch {
+            userGroupUseCase.fetchUserGroups(currentUserId).fold( // UseCase returns Result now
+                onSuccess = { groups ->
+                    if (!isActive) return@fold // Check if coroutine was cancelled
+                    Timber.i("Successfully fetched ${groups.size} user groups for $currentUserId.")
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,    // Stop initial loading indicator
+                            isRefreshing = false, // Stop refreshing indicator
+                            groups = groups       // Update data
+                        )
                     }
-                )
-            } catch (e: Exception) {
-                // Catch unexpected errors during the use case call itself
-                Timber.e(e, "Exception during fetchUserGroups coroutine execution.")
-                _uiState.update {
-                    it.copy(
-                        isLoading = false, // Ensure loading stops
-                        isRefreshing = false,
-                        error = e.message ?: "An unexpected error occurred"
-                    )
+                },
+                onFailure = { throwable ->
+                    if (!isActive) return@fold
+                    Timber.e(throwable, "Error fetching user groups for $currentUserId.")
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,    // Stop initial loading indicator on error
+                            isRefreshing = false, // Stop refreshing indicator on error
+                            error = throwable.message ?: "Failed to load your groups"
+                        )
+                    }
                 }
-            }
-            // 'finally' block is generally not needed here as fold handles both paths.
+            )
+            // No need for outer try-catch if UseCase handles it, but can be added for extra safety
         }
     }
 
+    // Public function called by the UI for pull-to-refresh
     fun refresh() {
-        if (!_uiState.value.isRefreshing) {
-            if (getCurrentUserIdOrSetError() != null) {
-                fetchUserGroups(isRefreshing = true)
-            }
+        Timber.d("Refresh triggered.")
+        fetchUserGroups(isInitialLoad = false, isRefresh = true) // Explicitly a refresh action
+    }
+
+    // Public function to clear user-visible errors (e.g., after Snackbar dismissal)
+    fun clearError() {
+        _uiState.update {
+            if (it.error != null) { it.copy(error = null) } else { it }
         }
     }
 
-    fun clearError() {
-        _uiState.update { it.copy(error = null) }
-    }
-
-    override fun onCleared() { // Cancel job when VM is cleared
+    override fun onCleared() {
         super.onCleared()
-        fetchJob?.cancel()
+        fetchJob?.cancel() // Ensure the fetch job is cancelled if the ViewModel is cleared
+        Timber.d("UserGroupsViewModel cleared.")
     }
 }

@@ -1,13 +1,15 @@
+// main/java/com/jamie/nodica/features/home/HomeScreen.kt
 package com.jamie.nodica.features.home
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Label
-import androidx.compose.material.icons.filled.* // Import common icons
+import androidx.compose.material.icons.automirrored.filled.Label // AutoMirrored icon
+import androidx.compose.material.icons.filled.* // Import common icons like Search, Clear
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,65 +25,71 @@ import androidx.navigation.compose.rememberNavController
 import com.jamie.nodica.features.groups.group.DiscoverGroupViewModel
 import com.jamie.nodica.features.groups.group.GroupItem
 import com.jamie.nodica.ui.theme.NodicaTheme
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, FlowPreview::class)
 @Composable
 fun HomeScreen(outerNavController: NavHostController) {
+    // Inject ViewModel
     val groupViewModel: DiscoverGroupViewModel = koinViewModel()
     // Observe the public UI state object
     val uiState by groupViewModel.uiState.collectAsState()
 
-    // Derive values from uiState
-    val groups = uiState.filteredGroups
+    // Extract states for readability
+    val availableGroups = uiState.availableGroups // Use the filtered list
     val isLoading = uiState.isLoading
+    val isJoining = uiState.isJoining // General joining indicator
+    val joiningGroupId = uiState.joiningGroupId // Specific group being joined
     val error = uiState.error
     val searchQuery = uiState.searchQuery
     val tagQuery = uiState.tagQuery
-    val isJoining = uiState.isJoining // General joining indicator
-    val joiningGroupId = uiState.joiningGroupId // Specific group being joined
 
+    // UI helpers
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
-    val focusManager = LocalFocusManager.current
+    val focusManager = LocalFocusManager.current // To clear focus
 
-    // Show errors (search/fetch errors, join errors) in a Snackbar
+    // Effect to show errors (fetch errors, join errors) in a Snackbar
     LaunchedEffect(error) {
         error?.let { errorMessage ->
             scope.launch {
                 snackbarHostState.showSnackbar(
                     message = errorMessage,
-                    duration = SnackbarDuration.Short
+                    duration = SnackbarDuration.Long // Show errors longer
                 )
                 groupViewModel.clearError() // Clear error after showing
             }
         }
     }
 
-    // Launched effect to refresh data when the screen becomes visible?
-    // DisposableEffect(Unit) { onDispose { } } // Can be useful
+    // Optional: Effect to fetch data when the screen becomes visible or upon parameter change
+    // LaunchedEffect(Unit) { groupViewModel.refreshDiscover() } // Example: Refresh on first composition
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(title = { Text("Discover Study Groups") })
-            // Optional: Add filter/refresh actions here
-            // actions = { IconButton(onClick = { groupViewModel.refreshDiscover() }) { Icon(Icons.Default.Refresh, null)} }
+            TopAppBar(
+                title = { Text("Discover Study Groups") }
+                // Optional: Add refresh action? Usually search implies refresh
+                //actions = { IconButton(onClick = { groupViewModel.refreshDiscover() }, enabled = !isLoading) { Icon(Icons.Default.Refresh, "Refresh") }}
+            )
         }
     ) { padding ->
         Column(
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
+                .clickable(onClick = { focusManager.clearFocus() }, enabled=true) // Click outside fields to dismiss keyboard
         ) {
-            // Search and Filter Area
+            // --- Search and Filter Area ---
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                // Search by Name
+                // Search by Name TextField
                 OutlinedTextField(
                     value = searchQuery,
-                    onValueChange = { groupViewModel.onSearchQueryChanged(it) },
+                    onValueChange = { groupViewModel.onSearchQueryChanged(it) }, // Debounce handled in VM
                     label = { Text("Search by name") },
                     placeholder = { Text("e.g., Calculus Study Group") },
                     modifier = Modifier.fillMaxWidth(),
@@ -95,18 +103,20 @@ fun HomeScreen(outerNavController: NavHostController) {
                         }
                     },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { keyboardController?.hide() })
+                    keyboardActions = KeyboardActions(onSearch = {
+                        focusManager.clearFocus() // Hide keyboard on search action
+                    })
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                // Filter by Tag
+                // Filter by Tag TextField
                 OutlinedTextField(
                     value = tagQuery,
-                    onValueChange = { groupViewModel.onTagQueryChanged(it) },
+                    onValueChange = { groupViewModel.onTagQueryChanged(it) }, // Debounce handled in VM
                     label = { Text("Filter by tag/subject") },
                     placeholder = { Text("e.g., Physics, IELTS, Kotlin") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.Label, "Filter Icon") }, // Label icon for tags
+                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.Label, "Filter Icon") },
                     trailingIcon = {
                         if (tagQuery.isNotEmpty()) {
                             IconButton(onClick = { groupViewModel.onTagQueryChanged("") }) {
@@ -115,63 +125,133 @@ fun HomeScreen(outerNavController: NavHostController) {
                         }
                     },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { keyboardController?.hide() })
+                    keyboardActions = KeyboardActions(onSearch = {
+                        focusManager.clearFocus() // Hide keyboard on search action
+                    })
                 )
-            }
+            } // End Search/Filter Column
 
-            // Content Area: Loading, Empty, or List
-            Box(modifier = Modifier.weight(1f)) {
+            // --- Content Area: Loading, Empty, Error, or List ---
+            Box(modifier = Modifier.weight(1f)) { // Takes remaining space
                 when {
-                    // Loading State
-                    isLoading && groups.isEmpty() -> { // Show only if list is empty during load
+                    // 1. Loading State
+                    isLoading -> {
                         Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
                     }
-                    // Empty State (after loading, no results matching filters)
-                    groups.isEmpty() && !isLoading -> {
-                        Box(Modifier.fillMaxSize().padding(24.dp), Alignment.Center) {
-                            Text(
-                                text = "No groups found matching your criteria.\nTry broadening your search or creating a new group!",
-                                textAlign = TextAlign.Center,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                    // 2. Error State (and no groups previously loaded)
+                    error != null && availableGroups.isEmpty() -> {
+                        // Use a generic ErrorState composable if available
+                        ErrorStateDiscover( // Or define locally
+                            message = error,
+                            onRetry = { groupViewModel.refreshDiscover() } // Retry refreshes all
+                        )
                     }
-                    // Groups List
+                    // 3. Empty State (Loaded successfully, no results matching filters/available)
+                    availableGroups.isEmpty() -> {
+                        EmptyStateDiscover() // Or define locally
+                    }
+                    // 4. Groups List
                     else -> {
                         LazyColumn(
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            items(groups, key = { it.id }) { group ->
+                            items(availableGroups, key = { group -> group.id }) { group ->
                                 // Determine if the join button for *this* group should show loading
                                 val isJoiningThisGroup = isJoining && joiningGroupId == group.id
 
                                 GroupItem(
                                     group = group,
-                                    joined = false, // These are always discoverable, not joined yet
+                                    joined = false, // These are groups NOT yet joined
                                     onActionClicked = { groupViewModel.joinGroup(group.id) },
-                                    actionText = "Join Group",
-                                    // Pass joining state to the item if needed for button state
-                                    isActionInProgress = isJoiningThisGroup
+                                    actionTextOverride = "Join Group",
+                                    isActionInProgress = isJoiningThisGroup // Pass joining state
                                 )
                             }
-                        }
+                        } // End LazyColumn
                     }
-                }
-                // Show pull-to-refresh indicator if needed (might be redundant with search loading)
-                // PullRefreshIndicator(...)
+                } // End When
+            } // End Content Box
+        } // End Main Column
+    } // End Scaffold
+}
+
+
+// --- Helper Composables for Discover Screen States (can be extracted) ---
+
+@Composable
+private fun EmptyStateDiscover(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 64.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Default.SearchOff, // Icon indicating nothing found
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = "No Groups Found",
+                style = MaterialTheme.typography.titleLarge,
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "Try adjusting your search or filter criteria, or create the first group for this topic!",
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun ErrorStateDiscover(modifier: Modifier = Modifier, message: String, onRetry: () -> Unit) {
+    Box(
+        modifier = modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 64.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Default.ErrorOutline, // Error icon
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = "Error Finding Groups",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = message,
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer // Or onSurfaceVariant
+            )
+            Spacer(Modifier.height(24.dp))
+            Button(onClick = onRetry) {
+                Text("Retry")
             }
         }
     }
 }
 
-// Example Preview (can be more elaborate)
+
+// --- Preview ---
 @Preview(showBackground = true)
 @Composable
 fun HomeScreenPreview() {
     NodicaTheme {
+        // In a real preview, inject a fake ViewModel using Koin test modules or pass fake state
         HomeScreen(rememberNavController())
     }
 }

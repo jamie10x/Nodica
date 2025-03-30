@@ -1,57 +1,62 @@
+// main/java/com/jamie/nodica/features/groups/group/DiscoverGroupViewModel.kt
 package com.jamie.nodica.features.groups.group
 
-import androidx.compose.runtime.Immutable // Import Immutable
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.jamie.nodica.features.groups.user_group.UserGroupUseCase
-import io.github.jan.supabase.SupabaseClient // Import client
-import io.github.jan.supabase.auth.auth // Import auth extension
+import com.jamie.nodica.features.groups.user_group.UserGroupUseCase // Use UserGroupUseCase
+import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.auth.auth
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import timber.log.Timber
 import kotlinx.coroutines.isActive
+import timber.log.Timber
 
+// Private state to hold all data needed for processing
+private data class DiscoverGroupsInternalState(
+    val discoverableGroups: List<Group> = emptyList(),
+    val joinedGroupIds: Set<String> = emptySet(),
+    val isLoadingDiscover: Boolean = false,
+    val isLoadingJoinedIds: Boolean = false, // Separate loading flag
+    val joiningGroupId: String? = null, // Track which group join is in progress
+    val error: String? = null,
+    val searchQuery: String = "",
+    val tagQuery: String = ""
+)
 
-@OptIn(FlowPreview::class)
+// Public state exposed to the UI
+@Immutable
+data class DiscoverGroupUiState(
+    // Groups filtered to exclude those the user already joined
+    val availableGroups: List<Group> = emptyList(),
+    // Combined loading state for initial view
+    val isLoading: Boolean = false,
+    // Indicates if a 'join' operation is specifically in progress
+    val isJoining: Boolean = false,
+    // ID of the group currently being joined
+    val joiningGroupId: String? = null,
+    val error: String? = null,
+    val searchQuery: String = "",
+    val tagQuery: String = ""
+)
+
+@FlowPreview
 class DiscoverGroupViewModel(
     private val groupUseCase: GroupUseCase,
-    private val userGroupUseCase: UserGroupUseCase,
-    private val supabaseClient: SupabaseClient // Inject client
-    // Removed currentUserId from constructor
+    private val userGroupUseCase: UserGroupUseCase, // Use the specific use case
+    private val supabaseClient: SupabaseClient
 ) : ViewModel() {
-
-    // Internal mutable state
-    private data class DiscoverGroupsInternalState(
-        val discoverableGroups: List<Group> = emptyList(),
-        val joinedGroupIds: Set<String> = emptySet(),
-        val isLoading: Boolean = false,
-        val joiningGroupId: String? = null,
-        val error: String? = null,
-        val searchQuery: String = "",
-        val tagQuery: String = ""
-    )
-
-    // Public immutable state exposed to the UI
-    @Immutable // Add Immutable annotation
-    data class DiscoverGroupUiState(
-        val filteredGroups: List<Group> = emptyList(),
-        val isLoading: Boolean = false,
-        val isJoining: Boolean = false,
-        val joiningGroupId: String? = null,
-        val error: String? = null,
-        val searchQuery: String = "",
-        val tagQuery: String = ""
-    )
 
     private val _internalState = MutableStateFlow(DiscoverGroupsInternalState())
 
+    // Map internal state to the public UI state
     val uiState: StateFlow<DiscoverGroupUiState> = _internalState.map { internal ->
         DiscoverGroupUiState(
-            filteredGroups = internal.discoverableGroups.filterNot { it.id in internal.joinedGroupIds },
-            isLoading = internal.isLoading,
+            availableGroups = internal.discoverableGroups.filterNot { group -> group.id in internal.joinedGroupIds },
+            isLoading = internal.isLoadingDiscover || internal.isLoadingJoinedIds, // Loading if either fetch is active initially
             isJoining = internal.joiningGroupId != null,
             joiningGroupId = internal.joiningGroupId,
             error = internal.error,
@@ -60,117 +65,148 @@ class DiscoverGroupViewModel(
         )
     }.stateIn(
         scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = DiscoverGroupUiState()
+        started = SharingStarted.WhileSubscribed(5000L),
+        initialValue = DiscoverGroupUiState(isLoading = true) // Start loading initially
     )
 
+    // Track jobs to prevent overlaps and allow cancellation
     private var fetchDiscoverJob: Job? = null
     private var fetchJoinedJob: Job? = null
+    private var joinGroupJob: Job? = null
 
-    // Function to safely get user ID or update state with error
-    private fun getCurrentUserIdOrSetError(actionDescription: String): String? {
+    // Helper to get user ID or handle error state
+    private fun getCurrentUserIdOrSetError(actionDesc: String = "perform action"): String? {
         val userId = supabaseClient.auth.currentUserOrNull()?.id
         if (userId == null) {
-            Timber.e("DiscoverGroupViewModel: User not logged in while trying to $actionDescription.")
-            _internalState.update { it.copy(
-                isLoading = false, // Ensure loading stops
-                joiningGroupId = null,
-                error = "Authentication error. Please log in again."
-            ) }
+            Timber.e("DiscoverGroupViewModel: User not logged in while trying to $actionDesc.")
+            _internalState.update {
+                if (it.error != "Authentication error.") { // Prevent state loops
+                    it.copy(
+                        isLoadingDiscover = false,
+                        isLoadingJoinedIds = false,
+                        joiningGroupId = null, // Cancel join if auth lost
+                        error = "Authentication error. Please log in again."
+                    )
+                } else it
+            }
         }
         return userId
     }
 
     init {
         Timber.d("DiscoverGroupViewModel initialized.")
-        // Only proceed if logged in
+        // Fetch initial data only if logged in
         if (getCurrentUserIdOrSetError("initialize ViewModel") != null) {
+            // Start both fetches concurrently
             fetchJoinedGroupIds()
-            triggerGroupFetch(debounceMillis = 0)
+            triggerGroupFetch(debounceMillis = 0L) // Initial fetch without debounce
+        } else {
+            // Ensure loading stops if not logged in
+            _internalState.update { it.copy(isLoadingDiscover = false, isLoadingJoinedIds = false)}
         }
     }
 
+    // Fetches IDs of groups the current user has joined
     private fun fetchJoinedGroupIds() {
         val currentUserId = getCurrentUserIdOrSetError("fetch joined groups") ?: return
 
-        if (fetchJoinedJob?.isActive == true) return
+        fetchJoinedJob?.cancel() // Cancel previous job if any
+        _internalState.update { it.copy(isLoadingJoinedIds = true, error = null) } // Set loading specific flag
+        Timber.d("Fetching joined group IDs for user $currentUserId")
+
         fetchJoinedJob = viewModelScope.launch {
-            Timber.d("Fetching joined group IDs for user $currentUserId")
-            // Don't necessarily set global loading=true here, could conflict with discover loading
-            // _internalState.update { it.copy(isLoading = true) }
             userGroupUseCase.fetchUserGroups(currentUserId).fold(
                 onSuccess = { joinedGroups ->
+                    if (!isActive) return@fold
                     val ids = joinedGroups.map { it.id }.toSet()
                     Timber.d("Fetched ${ids.size} joined group IDs.")
-                    _internalState.update { it.copy(joinedGroupIds = ids /*, isLoading = false */) }
+                    _internalState.update { it.copy(joinedGroupIds = ids, isLoadingJoinedIds = false) }
                 },
                 onFailure = { error ->
+                    if (!isActive) return@fold
                     Timber.e(error, "Error fetching joined group IDs.")
-                    // Don't overwrite discovery errors if they exist
-                    _internalState.update { current ->
-                        if (current.error == null) {
-                            current.copy(error = "Could not check your group memberships.")
-                        } else current
+                    _internalState.update {
+                        it.copy(
+                            isLoadingJoinedIds = false,
+                            // Only set error if no other critical error exists
+                            error = it.error ?: "Could not check your group memberships: ${error.message}"
+                        )
                     }
                 }
             )
         }
     }
 
+    // Triggers fetching discoverable groups, applying debounce
     private fun triggerGroupFetch(debounceMillis: Long = 400L) {
-        // No need to check userId here, as filtering happens locally based on joinedGroupIds
-        // The actual fetch can proceed even if userId is briefly null during init races
+        fetchDiscoverJob?.cancel() // Cancel previous fetch job
 
-        fetchDiscoverJob?.cancel()
+        // Update loading state immediately *if* debounce is zero (initial load/refresh)
+        if (debounceMillis == 0L) {
+            _internalState.update { it.copy(isLoadingDiscover = true, error = null)}
+        }
+
         fetchDiscoverJob = viewModelScope.launch {
-            delay(debounceMillis)
-            if (!isActive) return@launch
+            delay(debounceMillis) // Apply debounce
+            if (!isActive) return@launch // Check if cancelled during delay
 
-            _internalState.update { it.copy(isLoading = true, error = null) }
+            // If we had a debounce, set loading state *now*
+            if (debounceMillis > 0L) {
+                _internalState.update { it.copy(isLoadingDiscover = true, error = null)}
+            }
+
             Timber.d("Fetching discover groups. Search: '${_internalState.value.searchQuery}', Tag: '${_internalState.value.tagQuery}'")
 
-            try {
-                // Pass user ID to use case
-                val currentUserId = getCurrentUserIdOrSetError("fetch discover groups") ?: "" // Pass "" if null? Or handle in use case? Better to fetch regardless
-
-                val result = groupUseCase.fetchDiscoverGroups(
-                    searchQuery = _internalState.value.searchQuery,
-                    tagQuery = _internalState.value.tagQuery,
-                    currentUserId = currentUserId // Pass ID here
-                )
-                Timber.i("Fetched ${result.size} discoverable groups from repository.")
-                _internalState.update { it.copy(discoverableGroups = result, isLoading = false) }
-
-            } catch (e: Exception) {
-                Timber.e(e, "Error fetching discover groups.")
-                _internalState.update { it.copy(isLoading = false, error = e.message ?: "Failed to load groups") }
-            }
+            groupUseCase.fetchDiscoverGroups(
+                searchQuery = _internalState.value.searchQuery,
+                tagQuery = _internalState.value.tagQuery
+            ).fold( // UseCase returns Result now
+                onSuccess = { discoverableGroups ->
+                    if (!isActive) return@fold
+                    Timber.i("Fetched ${discoverableGroups.size} discoverable groups from repository.")
+                    _internalState.update { it.copy(discoverableGroups = discoverableGroups, isLoadingDiscover = false) }
+                },
+                onFailure = { e ->
+                    if (!isActive) return@fold
+                    Timber.e(e, "Error fetching discover groups.")
+                    _internalState.update { it.copy(isLoadingDiscover = false, error = e.message ?: "Failed to load groups") }
+                }
+            )
         }
     }
 
+    // Initiates joining a group
     fun joinGroup(groupId: String) {
         val currentUserId = getCurrentUserIdOrSetError("join group") ?: return
+        if (groupId.isBlank() || _internalState.value.joiningGroupId != null || groupId in _internalState.value.joinedGroupIds) {
+            Timber.w("Join group ($groupId) aborted. Blank ID, already joining, or already joined.")
+            return
+        }
 
-        if (groupId.isBlank()) return
-        if (_internalState.value.joiningGroupId != null || groupId in _internalState.value.joinedGroupIds) return
+        joinGroupJob?.cancel() // Cancel any previous join attempt
+        _internalState.update { it.copy(joiningGroupId = groupId, error = null) } // Set joining state
+        Timber.d("Attempting to join group $groupId for user $currentUserId")
 
-        _internalState.update { it.copy(joiningGroupId = groupId, error = null) }
-        viewModelScope.launch {
+        joinGroupJob = viewModelScope.launch {
             groupUseCase.joinGroup(groupId, currentUserId).fold(
                 onSuccess = {
+                    if (!isActive) return@fold
                     Timber.i("Successfully joined group $groupId")
-                    _internalState.update { it.copy(
-                        joiningGroupId = null,
-                        joinedGroupIds = it.joinedGroupIds + groupId
-                    ) }
-                    // Show success feedback via Snackbar in UI (triggered by state change potentially)
-                    // or set a temporary success message in state if needed
-                    // _internalState.update { it.copy(error = "Joined successfully!") } // Temporary feedback via error channel
+                    // Update internal state to reflect joined status
+                    _internalState.update {
+                        it.copy(
+                            joiningGroupId = null, // Clear joining indicator
+                            joinedGroupIds = it.joinedGroupIds + groupId // Add to joined set
+                        )
+                    }
+                    // Optionally: trigger a refresh of joined IDs for absolute certainty
+                    // fetchJoinedGroupIds()
                 },
                 onFailure = { error ->
+                    if (!isActive) return@fold
                     Timber.e(error, "Failed to join group $groupId")
                     val errorMessage = when (error) {
-                        is AlreadyJoinedException -> error.message // Show specific message
+                        is AlreadyJoinedException -> error.message // Use specific message
                         else -> error.message ?: "Failed to join group"
                     }
                     _internalState.update { it.copy(joiningGroupId = null, error = errorMessage) }
@@ -179,29 +215,45 @@ class DiscoverGroupViewModel(
         }
     }
 
+    // Updates search query and triggers fetch
     fun onSearchQueryChanged(query: String) {
-        if (query != _internalState.value.searchQuery) {
-            _internalState.update { it.copy(searchQuery = query) }
-            triggerGroupFetch()
+        val trimmedQuery = query.trim()
+        if (trimmedQuery != _internalState.value.searchQuery) {
+            _internalState.update { it.copy(searchQuery = trimmedQuery) }
+            triggerGroupFetch() // Fetch with debounce
         }
     }
 
+    // Updates tag query and triggers fetch
     fun onTagQueryChanged(query: String) {
-        if (query != _internalState.value.tagQuery) {
-            _internalState.update { it.copy(tagQuery = query) }
-            triggerGroupFetch()
+        val trimmedQuery = query.trim()
+        if (trimmedQuery != _internalState.value.tagQuery) {
+            _internalState.update { it.copy(tagQuery = trimmedQuery) }
+            triggerGroupFetch() // Fetch with debounce
         }
     }
 
+    // Clears user-facing errors
     fun clearError() {
-        _internalState.update { it.copy(error = null) }
+        _internalState.update { if (it.error != null) it.copy(error = null) else it }
     }
 
+    // Refreshes all data for the discovery screen
     fun refreshDiscover() {
-        // Re-fetch joined IDs and discoverable groups
+        Timber.d("Refresh Discover triggered.")
         if (getCurrentUserIdOrSetError("refresh discover") != null) {
-            fetchJoinedGroupIds() // Update knowledge of joined groups
-            triggerGroupFetch(debounceMillis = 0) // Force immediate fetch
+            // Force refresh of both joined IDs and discoverable groups
+            fetchJoinedGroupIds()
+            triggerGroupFetch(debounceMillis = 0L) // Fetch immediately
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        // Cancel all jobs when ViewModel is cleared
+        fetchDiscoverJob?.cancel()
+        fetchJoinedJob?.cancel()
+        joinGroupJob?.cancel()
+        Timber.d("DiscoverGroupViewModel cleared.")
     }
 }
