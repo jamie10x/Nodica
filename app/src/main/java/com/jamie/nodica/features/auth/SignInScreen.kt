@@ -51,11 +51,13 @@ fun SignInScreen(
     LaunchedEffect(state) {
         when (state) {
             is AuthUiState.Success -> {
-                navController.navigate(Routes.HOME) {
+                // Always navigate to Profile Setup after successful sign-in/sign-up
+                // The ProfileSetupScreen/ViewModel will handle redirecting to Home if setup is not needed.
+                navController.navigate(Routes.PROFILE_SETUP) {
                     popUpTo(navController.graph.startDestinationId) { inclusive = true }
                     launchSingleTop = true
                 }
-                viewModel.resetState()
+                viewModel.resetState() // Move reset *after* successful navigation trigger
             }
             is AuthUiState.Error -> {
                 scope.launch {

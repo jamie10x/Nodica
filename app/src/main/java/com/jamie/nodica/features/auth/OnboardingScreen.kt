@@ -10,6 +10,7 @@ import androidx.navigation.NavController
 import com.jamie.nodica.features.navigation.Routes
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
+import timber.log.Timber // Added Timber
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -22,24 +23,38 @@ fun OnboardingScreen(
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(authState) {
-        when (authState) {
+        when (val currentAuthState = authState) { // Give it a name
             is AuthUiState.Success -> {
-                // After sign-in/sign-up, navigate to PROFILE_SETUP.
-                // The SplashViewModel will handle the profile completeness check on app launch.
-                navController.navigate(Routes.PROFILE_SETUP) {
-                    popUpTo(Routes.ONBOARDING) { inclusive = true }
+                Timber.i("OnboardingScreen: Auth Successful. Navigating back to SPLASH to re-evaluate destination.")
+                // Navigate back to SPLASH route. This forces SplashViewModel
+                // to re-run its check with the now valid session.
+                navController.navigate(Routes.SPLASH) {
+                    // Clear the entire back stack up to the graph's start destination
+                    // including the onboarding/auth screens themselves.
+                    popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                    // Ensure Splash isn't added multiple times if navigated quickly
                     launchSingleTop = true
                 }
-                scope.launch { snackbarHostState.showSnackbar("Authentication successful!") }
-                viewModel.resetState()
+                // Show Snackbar AFTER triggering navigation if needed, or rely on Splash/Target screen feedback
+                // scope.launch { snackbarHostState.showSnackbar("Authentication successful!") }
+                // Resetting state might happen too quickly before navigation completes,
+                // maybe reset in Splash or upon reaching final destination.
+                // viewModel.resetState() // Reset moved or handled differently
             }
             is AuthUiState.Error -> {
+                Timber.w("OnboardingScreen: Auth Error: ${currentAuthState.message}")
                 scope.launch {
-                    snackbarHostState.showSnackbar((authState as AuthUiState.Error).message, duration = SnackbarDuration.Long)
+                    snackbarHostState.showSnackbar(currentAuthState.message, duration = SnackbarDuration.Long)
                 }
-                viewModel.resetState()
+                viewModel.resetState() // Reset state after showing error
             }
-            else -> { /* Idle or Loading */ }
+            AuthUiState.Loading -> {
+                Timber.d("OnboardingScreen: Auth Loading...")
+                // Optionally show a loading indicator on the OnboardingScreen itself
+            }
+            AuthUiState.Idle -> {
+                Timber.d("OnboardingScreen: Auth Idle.")
+            }
         }
     }
 
@@ -54,20 +69,30 @@ fun OnboardingScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Text("Welcome to Nodica!", style = MaterialTheme.typography.headlineMedium)
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(
-                onClick = { navController.navigate(Routes.AUTH) },
-                modifier = Modifier.fillMaxWidth().height(48.dp)
-            ) {
-                Text("Continue with Email")
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-            Button(
-                onClick = { viewModel.signInOrSignUpWithGoogle() },
-                modifier = Modifier.fillMaxWidth().height(48.dp)
-            ) {
-                Text("Sign In with Google")
+            // Display Loading state if needed
+            if (authState == AuthUiState.Loading) {
+                CircularProgressIndicator()
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Authenticating...")
+            } else {
+                Text("Welcome to Nodica!", style = MaterialTheme.typography.headlineMedium)
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = { navController.navigate(Routes.AUTH) },
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    enabled = authState != AuthUiState.Loading // Disable buttons while loading
+                ) {
+                    Text("Continue with Email")
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = { viewModel.signInOrSignUpWithGoogle() },
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    enabled = authState != AuthUiState.Loading // Disable buttons while loading
+                ) {
+                    // Optional: Show different text or indicator during Google sign-in attempt
+                    Text("Sign In with Google")
+                }
             }
         }
     }
