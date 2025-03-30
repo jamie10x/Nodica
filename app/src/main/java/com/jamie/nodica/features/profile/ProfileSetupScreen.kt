@@ -33,76 +33,100 @@ import timber.log.Timber
 import java.util.Locale
 
 // --- Helper Composable: TimePickerField ---
+/**
+ * A composable that displays selected time and shows a TimePickerDialog on click.
+ *
+ * @param label The text label to display for the field.
+ * @param selectedTime The currently selected time string (e.g., "HH:mm") or empty if none selected.
+ * @param onTimeSelected Lambda function called with the selected time string ("HH:mm").
+ * @param enabled Controls if the field is interactive.
+ */
 @Composable
 fun TimePickerField(
     label: String,
-    selectedTime: String, // Displayed time as text (e.g., "09:30")
+    selectedTime: String,
     onTimeSelected: (String) -> Unit,
-    enabled: Boolean = true // Added enabled parameter
+    enabled: Boolean = true
 ) {
     val context = LocalContext.current
+    // State to control the visibility of the TimePickerDialog
     var showPicker by remember { mutableStateOf(false) }
 
+    // Show the TimePickerDialog when showPicker becomes true
     if (showPicker) {
-        val initialHour = selectedTime.substringBefore(":", missingDelimiterValue = "9").toIntOrNull() ?: 9
-        val initialMinute = selectedTime.substringAfter(":", "0").toIntOrNull() ?: 0
+        // Determine initial values for the picker
+        val initialHour = selectedTime.substringBefore(":", "9").toIntOrNull() ?: 9 // Default to 9 AM
+        val initialMinute = selectedTime.substringAfter(":", "0").toIntOrNull() ?: 0  // Default to 00 minutes
+
+        // Create and show the dialog
         TimePickerDialog(
             context,
-            { _, hourOfDay, minute ->
-                val formatted = String.format(Locale.getDefault(), "%02d:%02d", hourOfDay, minute)
-                onTimeSelected(formatted)
-                showPicker = false
+            { _, hourOfDay, minute -> // Listener for time selection
+                // Format the selected time into "HH:mm" string
+                val formattedTime = String.format(Locale.getDefault(), "%02d:%02d", hourOfDay, minute)
+                onTimeSelected(formattedTime) // Call the callback with the formatted time
+                showPicker = false // Hide the picker after selection
             },
             initialHour,
             initialMinute,
             true // Use 24-hour format
         ).apply {
-            // Handle dismiss action if needed
+            // Set a listener to ensure showPicker is false if the dialog is dismissed
             setOnDismissListener { showPicker = false }
-            show()
+            show() // Display the dialog
         }
     }
 
-    // Use OutlinedButton for consistency with TextFields, or Button/TextButton as desired
+    // The button that triggers the picker
     OutlinedButton(
-        onClick = { if (enabled) showPicker = true }, // Only show picker if enabled
+        onClick = { if (enabled) showPicker = true }, // Show picker only if enabled
         modifier = Modifier.fillMaxWidth(),
-        enabled = enabled, // Apply enabled state to the button
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp) // Adjust padding
+        enabled = enabled, // Apply enabled state to the button appearance
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp) // Adjusted padding for better look
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween, // Align text and time
+            horizontalArrangement = Arrangement.SpaceBetween, // Space out label and time
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Display the label
             Text(
-                text = label, // Use label directly
+                text = label,
                 style = MaterialTheme.typography.bodyLarge,
-                color = if (enabled) LocalContentColor.current else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f) // Adjust color when disabled
+                // Adjust color based on enabled state
+                color = if (enabled) LocalContentColor.current else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
             )
+            // Display the selected time or placeholder text
             Text(
                 text = if (selectedTime.isBlank()) "Select Time" else selectedTime,
                 style = MaterialTheme.typography.bodyLarge,
-                color = if (enabled) LocalContentColor.current else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f) // Adjust color when disabled
+                // Adjust color based on enabled state
+                color = if (enabled) LocalContentColor.current else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
             )
         }
     }
 }
 
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class) // For FlowRow, imePadding
+// --- Main Screen Composable ---
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ProfileSetupScreen(
     navController: NavController
 ) {
+    // Obtain ViewModel using Koin
     val viewModel: ProfileViewModel = koinViewModel()
+    // Collect UI state from ViewModel
     val uiState by viewModel.uiState.collectAsState()
+    // State for managing Snackbars
     val snackbarHostState = remember { SnackbarHostState() }
+    // Coroutine scope for launching effects
     val scope = rememberCoroutineScope()
+    // Controller for managing the software keyboard
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    // --- Form state variables ---
-    // These hold the current values entered by the user in the form fields.
+    // --- Form State Variables ---
+    // Use rememberSaveable to preserve state across configuration changes/process death
     var name by rememberSaveable { mutableStateOf("") }
     var school by rememberSaveable { mutableStateOf("") }
     var preferredTime by rememberSaveable { mutableStateOf("") }
@@ -113,58 +137,63 @@ fun ProfileSetupScreen(
 
     // --- UI State & Derived Values ---
     val currentStatus = uiState.profileStatus
-    val isLoadingOverall = currentStatus == ProfileStatus.Loading
+    val isLoading = uiState.isLoading // Reflects initial/tag loading
     val isSaving = currentStatus == ProfileStatus.Saving
     val isCriticalError = currentStatus == ProfileStatus.CriticalError
-    val fieldsEnabled = !isLoadingOverall && !isSaving && !isCriticalError // Enable fields when not loading/saving/error
+    // Determine if form fields should be interactive
+    val fieldsEnabled = !isLoading && !isSaving && !isCriticalError
 
-    // Show validation hints only if a save attempt failed due to validation.
+    // Determine if validation error hints should be shown
     val showValidationHints = currentStatus == ProfileStatus.SaveError
-
-    // Derived error states for highlighting specific fields.
+    // Specific error flags for highlighting fields
     val nameIsError = name.isBlank() && showValidationHints
     val tagsAreError = (selectedExistingTagIds.isEmpty() && enteredCustomTags.isEmpty()) && showValidationHints
 
     // --- Side Effects ---
 
-    // Effect to handle navigation based on ProfileStatus changes from the ViewModel.
+    // Handle navigation triggered by ViewModel status changes
     LaunchedEffect(key1 = currentStatus) {
         when (currentStatus) {
-            ProfileStatus.ProfileExists, ProfileStatus.SaveSuccess -> {
-                // Profile exists or was just saved successfully, navigate to Home.
-                val message = if (currentStatus == ProfileStatus.SaveSuccess) "Profile saved!" else "Profile setup skipped."
-                Timber.i("ProfileSetupScreen: $message Navigating to Home.")
-                // Show quick feedback
-                scope.launch { snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Short) }
-                // Short delay to allow Snackbar visibility
-                delay(if (currentStatus == ProfileStatus.SaveSuccess) 500 else 100)
-                // Navigate to Home, clearing the setup/auth backstack.
-                navController.navigate(Routes.HOME) {
-                    popUpTo(navController.graph.startDestinationId) { inclusive = true } // Pop everything up to the start
-                    launchSingleTop = true // Avoid multiple Home instances
+            ProfileStatus.SaveSuccess -> {
+                Timber.i("ProfileSetupScreen: SaveSuccess detected. Navigating to Home.")
+                scope.launch { snackbarHostState.showSnackbar("Profile saved!", duration = SnackbarDuration.Short) }
+                delay(500) // Allow time to see Snackbar
+                navController.navigate(Routes.HOME) { // Navigate to Home screen
+                    popUpTo(navController.graph.startDestinationId) { inclusive = true } // Clear back stack
+                    launchSingleTop = true
                 }
-                // No need to call viewModel.acknowledgeSuccess() as navigation replaces the screen.
+            }
+            // ProfileExists is primarily handled by SplashViewModel directing away,
+            // but if reached here, navigate away as well.
+            ProfileStatus.ProfileExists -> {
+                Timber.i("ProfileSetupScreen: ProfileExists detected. Navigating to Home.")
+                // No Snackbar needed usually, just navigate
+                navController.navigate(Routes.HOME) {
+                    popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                    launchSingleTop = true
+                }
             }
             ProfileStatus.CriticalError -> {
                 Timber.e("ProfileSetupScreen: Observed CriticalError state.")
-                // Error message is shown by the other LaunchedEffect.
+                // Error message shown via the other LaunchedEffect.
             }
             else -> {
-                // No navigation needed for Loading, NeedsSetup, Saving, SaveError states.
-                Timber.d("ProfileSetupScreen: Observed ProfileStatus = $currentStatus, no navigation.")
+                // No navigation for NeedsSetup, Saving, SaveError
+                Timber.d("ProfileSetupScreen: Observed status = $currentStatus.")
             }
         }
     }
 
-    // Effect to show error messages from the ViewModel in a Snackbar.
+    // Show error messages from ViewModel in a Snackbar
     LaunchedEffect(key1 = uiState.error) {
         uiState.error?.let { errorMsg ->
             scope.launch {
                 snackbarHostState.showSnackbar(
                     message = errorMsg,
+                    // Show SaveErrors briefly, others longer
                     duration = if (currentStatus == ProfileStatus.SaveError) SnackbarDuration.Short else SnackbarDuration.Long
                 )
-                // Clear the error in the ViewModel after showing it.
+                // Clear error in ViewModel after it's shown
                 viewModel.clearError()
             }
         }
@@ -174,48 +203,53 @@ fun ProfileSetupScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            CenterAlignedTopAppBar(
-                title = { Text("Setup Your Profile") }
-                // Optional: Add back button if needed, but flow usually prevents going back here easily.
-            )
+            CenterAlignedTopAppBar(title = { Text("Setup Your Profile") })
         },
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest // Base background
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest // Set background
     ) { paddingValues ->
 
-        // Handle Loading and Critical Error states fullscreen
+        // Display content based on the current loading/error/form state
         when {
-            isLoadingOverall -> {
-                Box(Modifier.fillMaxSize().padding(paddingValues), Alignment.Center) {
+            // Loading indicator (shown during initial load / tag fetch)
+            isLoading -> {
+                Box(
+                    Modifier.fillMaxSize().padding(paddingValues),
+                    contentAlignment = Alignment.Center
+                ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator()
                         Spacer(Modifier.height(16.dp))
-                        Text("Loading profile data...")
+                        Text("Loading setup...")
                     }
                 }
             }
+            // Critical error display
             isCriticalError -> {
-                Box(Modifier.fillMaxSize().padding(paddingValues).padding(24.dp), Alignment.Center) {
+                Box(
+                    Modifier.fillMaxSize().padding(paddingValues).padding(24.dp), // Extra padding for error message
+                    contentAlignment = Alignment.Center
+                ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("Error", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.error)
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            uiState.error ?: "Cannot load profile information.", // Show specific error if available
+                            uiState.error ?: "An critical error occurred.",
                             color = MaterialTheme.colorScheme.error,
                             textAlign = TextAlign.Center
                         )
-                        // Optional: Add a retry button here?
+                        // Consider adding a retry mechanism/button here
                     }
                 }
             }
-            // Otherwise, show the main form content
+            // Form display
             else -> {
-                val scrollState = rememberScrollState()
+                val scrollState = rememberScrollState() // Remember scroll state for the column
                 Column(
                     modifier = Modifier
                         .padding(paddingValues) // Apply padding from Scaffold
                         .fillMaxSize()
-                        .verticalScroll(scrollState) // Allow scrolling for form content
-                        .padding(horizontal = 16.dp, vertical = 20.dp), // Inner padding for content
+                        .verticalScroll(scrollState) // Make the form scrollable
+                        .padding(horizontal = 16.dp, vertical = 20.dp), // Inner content padding
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text("Tell us about yourself", style = MaterialTheme.typography.titleLarge)
@@ -227,22 +261,16 @@ fun ProfileSetupScreen(
                     Spacer(modifier = Modifier.height(20.dp))
 
                     // --- Form Fields ---
-
                     OutlinedTextField(
                         value = name,
-                        onValueChange = { name = it; viewModel.clearError() }, // Clear error on input change
+                        onValueChange = { name = it; viewModel.clearError() },
                         label = { Text("Name *") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        keyboardOptions = KeyboardOptions(
-                            capitalization = KeyboardCapitalization.Words,
-                            imeAction = ImeAction.Next // Move to next field
-                        ),
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Next),
                         enabled = fieldsEnabled,
                         isError = nameIsError,
-                        supportingText = if (nameIsError) {
-                            { Text("Name cannot be empty", color = MaterialTheme.colorScheme.error) }
-                        } else null
+                        supportingText = if (nameIsError) { { Text("Name cannot be empty", color = MaterialTheme.colorScheme.error) } } else null
                     )
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -252,15 +280,11 @@ fun ProfileSetupScreen(
                         label = { Text("School / Institution") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        keyboardOptions = KeyboardOptions(
-                            capitalization = KeyboardCapitalization.Words,
-                            imeAction = ImeAction.Next
-                        ),
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Next),
                         enabled = fieldsEnabled
                     )
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Time Picker Field
                     TimePickerField(
                         label = "Preferred Study Time",
                         selectedTime = preferredTime,
@@ -273,12 +297,9 @@ fun ProfileSetupScreen(
                         value = studyGoals,
                         onValueChange = { studyGoals = it },
                         label = { Text("What are your study goals?") },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp), // Set min height
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp),
                         maxLines = 5,
-                        keyboardOptions = KeyboardOptions(
-                            capitalization = KeyboardCapitalization.Sentences,
-                            imeAction = ImeAction.Default // Default action (may show Done or Next depending on IME)
-                        ),
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Default),
                         enabled = fieldsEnabled
                     )
                     Spacer(modifier = Modifier.height(28.dp))
@@ -288,102 +309,46 @@ fun ProfileSetupScreen(
                     Text("Select or Add Subjects & Interests *", style = MaterialTheme.typography.titleLarge)
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Conditional rendering for tags based on loading/error/data states
                     when {
-                        uiState.isLoadingTags -> {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text("Loading subjects...", style = MaterialTheme.typography.bodyMedium)
-                            }
-                        }
-                        // Check for tag-specific error and empty tags list
-                        uiState.error?.contains("subjects/interests", ignoreCase = true) == true && uiState.availableTags.isEmpty() -> {
-                            Text(uiState.error ?: "Could not load subjects.", color = MaterialTheme.colorScheme.error)
-                        }
-                        // No suggested tags available (after loading finished without error)
-                        uiState.availableTags.isEmpty() && !uiState.isLoadingTags -> {
-                            Text(
-                                "No suggested subjects found. Add your own below!",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        // Display available tags grouped by category
+                        uiState.isLoadingTags -> { Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)); Text("Loading subjects...") }}
+                        uiState.error?.contains("subjects/interests") == true && uiState.availableTags.isEmpty() -> { Text(uiState.error ?: "Could not load subjects.", color = MaterialTheme.colorScheme.error) }
+                        uiState.availableTags.isEmpty() && !uiState.isLoadingTags -> { Text("No suggested subjects found. Add your own below!", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         else -> {
                             uiState.availableTags.forEach { (category, tagsInCategory) ->
-                                Text(
-                                    category,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    modifier = Modifier.padding(top = 12.dp, bottom = 8.dp).fillMaxWidth() // Ensure title takes full width
-                                )
-                                // Use FlowRow for chip layout that wraps
-                                FlowRow(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp) // Spacing between rows of chips
-                                ) {
+                                Text(category, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp, bottom = 8.dp).fillMaxWidth())
+                                FlowRow( modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp) ) {
                                     tagsInCategory.forEach { tag ->
                                         FilterChip(
                                             selected = tag.id in selectedExistingTagIds,
-                                            onClick = {
-                                                // Toggle selection state only if fields are enabled
-                                                if(fieldsEnabled) {
-                                                    selectedExistingTagIds = if (tag.id in selectedExistingTagIds) {
-                                                        selectedExistingTagIds - tag.id
-                                                    } else {
-                                                        selectedExistingTagIds + tag.id
-                                                    }
-                                                    viewModel.clearError() // Clear validation error if selecting a tag fixes it
-                                                }
-                                            },
+                                            onClick = { if(fieldsEnabled) { selectedExistingTagIds = if (tag.id in selectedExistingTagIds) selectedExistingTagIds - tag.id else selectedExistingTagIds + tag.id; viewModel.clearError() } },
                                             label = { Text(tag.name) },
-                                            leadingIcon = if (tag.id in selectedExistingTagIds) {
-                                                { Icon(Icons.Filled.Done, "Selected", Modifier.size(FilterChipDefaults.IconSize)) }
-                                            } else null,
-                                            enabled = fieldsEnabled // Disable chips if form is not enabled
+                                            leadingIcon = if (tag.id in selectedExistingTagIds) { { Icon(Icons.Filled.Done, "Selected", Modifier.size(FilterChipDefaults.IconSize)) } } else null,
+                                            enabled = fieldsEnabled
                                         )
                                     }
                                 }
                             }
                         }
                     }
-                    // Display validation error for tags if applicable
-                    if (tagsAreError) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Please select or add at least one subject/interest",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(start = 4.dp) // Align with text field padding
-                        )
-                    }
+                    if (tagsAreError) { Spacer(Modifier.height(8.dp)); Text("Please select or add at least one subject/interest", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(start = 4.dp)) }
                     Spacer(modifier = Modifier.height(20.dp))
 
                     // --- Custom Tag Input ---
                     Text("Add Custom Tags", style = MaterialTheme.typography.titleMedium)
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Row( Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically ) {
                         OutlinedTextField(
                             value = customTagNameInput,
                             onValueChange = { customTagNameInput = it },
                             label = { Text("Type a tag and press add") },
                             modifier = Modifier.weight(1f),
                             singleLine = true,
-                            keyboardOptions = KeyboardOptions(
-                                capitalization = KeyboardCapitalization.Words,
-                                imeAction = ImeAction.Done // Use Done action
-                            ),
+                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
                             keyboardActions = KeyboardActions(onDone = {
                                 val trimmed = customTagNameInput.trim()
                                 if (trimmed.isNotBlank() && trimmed.length <= 50 && !enteredCustomTags.any { it.equals(trimmed, ignoreCase = true) }) {
-                                    enteredCustomTags = enteredCustomTags + trimmed
-                                    customTagNameInput = ""
-                                    viewModel.clearError() // Clear validation error if adding a tag fixes it
+                                    enteredCustomTags += trimmed; customTagNameInput = ""; viewModel.clearError()
                                 }
-                                keyboardController?.hide() // Hide keyboard on Done
+                                keyboardController?.hide()
                             }),
                             enabled = fieldsEnabled
                         )
@@ -391,26 +356,15 @@ fun ProfileSetupScreen(
                             onClick = {
                                 val trimmed = customTagNameInput.trim()
                                 if (trimmed.isNotBlank() && trimmed.length <= 50 && !enteredCustomTags.any { it.equals(trimmed, ignoreCase = true) }) {
-                                    enteredCustomTags = enteredCustomTags + trimmed
-                                    customTagNameInput = ""
-                                    viewModel.clearError() // Clear validation error
-                                    keyboardController?.hide()
-                                } else if (trimmed.isBlank()) {
-                                    scope.launch { snackbarHostState.showSnackbar("Tag cannot be empty") }
-                                } else if (trimmed.length > 50) {
-                                    scope.launch { snackbarHostState.showSnackbar("Tag is too long (max 50 chars)") }
-                                } else { // Already added
-                                    scope.launch { snackbarHostState.showSnackbar("Tag already added") }
-                                }
+                                    enteredCustomTags += trimmed; customTagNameInput = ""; viewModel.clearError(); keyboardController?.hide()
+                                } else if (trimmed.isBlank()) { scope.launch { snackbarHostState.showSnackbar("Tag cannot be empty") }
+                                } else if (trimmed.length > 50) { scope.launch { snackbarHostState.showSnackbar("Tag is too long (max 50 chars)") }
+                                } else { scope.launch { snackbarHostState.showSnackbar("Tag already added") } }
                             },
                             enabled = customTagNameInput.isNotBlank() && fieldsEnabled,
                             modifier = Modifier.padding(start = 8.dp)
-                        ) {
-                            Icon(Icons.Filled.AddCircle, contentDescription = "Add Custom Tag")
-                        }
-                    }
-
-                    // Display entered custom tags
+                        ) { Icon(Icons.Filled.AddCircle, contentDescription = "Add Custom Tag") }
+                    } // End Row
                     if (enteredCustomTags.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(12.dp))
                         FlowRow(
@@ -418,23 +372,12 @@ fun ProfileSetupScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            // Sort alphabetically for consistent display
                             enteredCustomTags.sortedBy { it.lowercase() }.forEach { customTag ->
                                 InputChip(
-                                    selected = false, // Input chips aren't really "selected" here
-                                    onClick = {
-                                        if(fieldsEnabled) {
-                                            enteredCustomTags = enteredCustomTags - customTag
-                                        }
-                                    }, // Click to remove
+                                    selected = false,
+                                    onClick = { if(fieldsEnabled) enteredCustomTags -= customTag }, // Remove tag on click
                                     label = { Text(customTag) },
-                                    trailingIcon = { // Use trailing icon for remove action
-                                        Icon(
-                                            Icons.Filled.Cancel,
-                                            contentDescription = "Remove $customTag Tag",
-                                            Modifier.size(InputChipDefaults.IconSize)
-                                        )
-                                    },
+                                    trailingIcon = { Icon(Icons.Filled.Cancel, "Remove $customTag Tag", Modifier.size(InputChipDefaults.IconSize)) },
                                     enabled = fieldsEnabled
                                 )
                             }
@@ -445,8 +388,7 @@ fun ProfileSetupScreen(
                     // --- Save Button ---
                     Button(
                         onClick = {
-                            keyboardController?.hide() // Hide keyboard before saving
-                            // Call ViewModel to save the profile data collected in the form state variables
+                            keyboardController?.hide() // Hide keyboard first
                             viewModel.saveProfile(
                                 name = name,
                                 school = school,
@@ -456,36 +398,30 @@ fun ProfileSetupScreen(
                                 newCustomTagNames = enteredCustomTags.toList()
                             )
                         },
-                        enabled = fieldsEnabled, // Button enabled only when fields are enabled (not loading/saving)
+                        enabled = fieldsEnabled, // Enable button when form is enabled
                         modifier = Modifier.fillMaxWidth().height(48.dp)
                     ) {
-                        if (isSaving) {
-                            Row(verticalAlignment = Alignment.CenterVertically) { // Align items in the button
-                                CircularProgressIndicator(
-                                    color = MaterialTheme.colorScheme.onPrimary, // Use contrast color
-                                    modifier = Modifier.size(24.dp).padding(end = 8.dp) // Size and spacing
-                                )
+                        if (isSaving) { // Show saving indicator
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(24.dp).padding(end = 8.dp))
                                 Text("Saving...")
                             }
-                        } else {
+                        } else { // Show normal text
                             Text("Save Profile & Continue")
                         }
-                    }
-                } // End Column for form content
-            } // End Else block for showing form
-        } // End When for Loading/Error/Form
+                    } // End Button
+                } // End Form Column
+            } // End Else
+        } // End When
     } // End Scaffold
 }
 
-// Preview Composable - Minimal setup for previewing the layout
+// --- Preview (Unchanged) ---
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Preview(showBackground = true, name = "Profile Setup Preview")
 @Composable
 fun ProfileSetupScreenPreview() {
     NodicaTheme {
-        // Provide a dummy NavController for the preview
         ProfileSetupScreen(navController = rememberNavController())
-        // In a real preview, you might inject a dummy ViewModel using a PreviewParameterProvider
-        // or configure Koin differently for previews if needed.
     }
 }

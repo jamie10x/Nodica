@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import timber.log.Timber
+import kotlinx.serialization.SerializationException // Import for specific catch
 
 sealed class SplashDestination {
     object Loading : SplashDestination()
@@ -51,7 +52,6 @@ class SplashViewModel(private val supabase: SupabaseClient) : ViewModel() {
 
             try {
                 // 1. Check Authentication Session
-                // Attempt to retrieve the currently stored session.
                 val session = supabase.auth.currentSessionOrNull()
                 Timber.i("SplashViewModel: Session found? ${session != null}. User ID: ${session?.user?.id ?: "N/A"}")
 
@@ -62,36 +62,28 @@ class SplashViewModel(private val supabase: SupabaseClient) : ViewModel() {
 
                 } else {
                     // User IS logged in. Now check profile status.
-                    val userId = session.user!!.id // Safe non-null assertion due to check above
+                    val userId = session.user!!.id // Safe non-null assertion
 
                     // 2. Check Profile Completeness
-                    // Explicitly define the columns needed to determine completeness.
-                    // CRITICAL: Ensure 'id' is included if your UserProfile data class requires it.
                     val requiredColumns = "id, name, institution, study_goals"
                     Timber.d("SplashViewModel: Fetching profile columns '$requiredColumns' for user: $userId")
 
-                    // Fetch the user's profile data, selecting only the necessary columns.
-                    // Use decodeSingleOrNull: Handles the case where the user exists in auth
-                    // but might not have a corresponding row in the 'users' table yet (returns null),
-                    // or if the query returns exactly one row.
-                    // Assumes RLS policies are correctly configured to allow reading these columns.
                     val profile = supabase.postgrest.from("users")
-                        .select(columns = Columns.raw(requiredColumns)) { // Explicit columns via raw string
-                            filter { eq("id", userId) } // Filter for the logged-in user
-                            limit(1)                   // Expect only one row
-                            // Ensure NO .single() modifier is used here!
+                        .select(columns = Columns.raw(requiredColumns)) {
+                            filter { eq("id", userId) }
+                            limit(1)
                         }
-                        .decodeSingleOrNull<UserProfile>() // Safely decodes to UserProfile?
+                        .decodeSingleOrNull<UserProfile>() // Handles '[]' -> null
 
                     Timber.d("SplashViewModel: Profile fetch result: ${if (profile != null) "Found" else "Not Found or Decode Failed"}")
 
                     // 3. Determine Navigation Destination
                     if (isProfileComplete(profile)) {
-                        // Profile exists and has the required fields filled.
+                        // Profile exists AND required fields are filled.
                         _destination.value = SplashDestination.Navigate(Routes.HOME)
                         Timber.i("SplashViewModel: Profile exists and is complete. Navigating to Home.")
                     } else {
-                        // Profile doesn't exist (null) or is missing required fields.
+                        // Profile doesn't exist (null) OR exists but fields are blank.
                         _destination.value = SplashDestination.Navigate(Routes.PROFILE_SETUP)
                         Timber.i("SplashViewModel: Profile incomplete or not found. Navigating to Profile Setup.")
                     }
@@ -99,23 +91,22 @@ class SplashViewModel(private val supabase: SupabaseClient) : ViewModel() {
 
                 // --- Error Handling ---
             } catch (e: HttpRequestException) {
-                // Network-related errors during the request.
                 Timber.e(e, "SplashViewModel: Network error during check, navigating to Onboarding.")
                 _destination.value = SplashDestination.Navigate(Routes.ONBOARDING)
             } catch (e: RestException) {
-                // Errors specifically from the Supabase API (e.g., RLS violation, invalid query).
                 Timber.e(e, "SplashViewModel: Database/API error during check, navigating to Onboarding. Error: ${e.message}")
                 _destination.value = SplashDestination.Navigate(Routes.ONBOARDING)
+            } catch (e: SerializationException) {
+                Timber.e(e, "SplashViewModel: Error parsing profile data during check, navigating to Onboarding.")
+                _destination.value = SplashDestination.Navigate(Routes.ONBOARDING)
             } catch (e: Exception) {
-                // Catch any other unexpected errors (e.g., kotlinx.serialization errors if JSON is malformed
-                // despite passing initial checks, other runtime exceptions).
-                Timber.e(e, "SplashViewModel: Generic/Decoding error during check, navigating to Onboarding.")
+                Timber.e(e, "SplashViewModel: Generic error during check, navigating to Onboarding.")
                 _destination.value = SplashDestination.Navigate(Routes.ONBOARDING) // Safe fallback
             } finally {
-                // 4. Ensure Minimum Splash Duration (runs even if errors occurred)
+                // 4. Ensure Minimum Splash Duration
                 val elapsed = System.currentTimeMillis() - startTime
                 Timber.d("SplashViewModel: Checks took ${elapsed}ms.")
-                if (elapsed < 1000L) { // Ensure splash shows for at least 1 second
+                if (elapsed < 1000L) {
                     val delayNeeded = 1000L - elapsed
                     Timber.d("SplashViewModel: Delaying for ${delayNeeded}ms...")
                     delay(delayNeeded)
@@ -126,28 +117,18 @@ class SplashViewModel(private val supabase: SupabaseClient) : ViewModel() {
     }
 
     /**
-     * Determines if the fetched user profile is considered "complete"
-     * based on the application's requirements.
-     *
-     * A null profile (user row doesn't exist or couldn't be fetched/decoded)
-     * is always considered incomplete.
-     *
-     * @param profile The fetched UserProfile object, or null if not found/error.
-     * @return True if the profile exists and required fields are non-blank, False otherwise.
+     * Determines if the fetched user profile is considered "complete".
+     * A null profile is always considered incomplete.
      */
     private fun isProfileComplete(profile: UserProfile?): Boolean {
         if (profile == null) {
             Timber.v("isProfileComplete: Profile is null -> Incomplete.")
-            return false // Profile doesn't exist, definitely incomplete.
+            return false
         }
-
-        // Check if essential fields required after login are filled.
-        // Adjust these conditions based on your app's specific definition of a "complete" profile.
         val complete = profile.name.isNotBlank() &&
-                !profile.school.isNullOrBlank() && // 'institution' maps to 'school' field
+                !profile.school.isNullOrBlank() &&
                 !profile.studyGoals.isNullOrBlank()
-
-        Timber.v("isProfileComplete: Name='${profile.name}', School='${profile.school}', Goals='${profile.studyGoals}' -> Complete: $complete")
+        Timber.v("isProfileComplete Check: Name='${profile.name}', School='${profile.school}', Goals='${profile.studyGoals}' -> Complete: $complete")
         return complete
     }
 }
