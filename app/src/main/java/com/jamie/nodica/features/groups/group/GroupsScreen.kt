@@ -1,4 +1,3 @@
-// Corrected: main/java/com/jamie/nodica/features/groups/group/GroupsScreen.kt
 package com.jamie.nodica.features.groups.group
 
 import androidx.compose.foundation.layout.*
@@ -7,6 +6,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.pullrefresh.PullRefreshIndicator
 import androidx.compose.material.pullrefresh.pullRefresh
 import androidx.compose.material.pullrefresh.rememberPullRefreshState
@@ -15,28 +15,30 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import androidx.navigation.compose.rememberNavController
 import com.jamie.nodica.features.groups.user_group.UserGroupsViewModel
 import com.jamie.nodica.features.navigation.Routes
+import com.jamie.nodica.ui.theme.NodicaTheme
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterialApi::class) // Keep both OptIns
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterialApi::class)
 @Composable
 fun GroupsScreen(outerNavController: NavHostController) {
     val userGroupsViewModel: UserGroupsViewModel = koinViewModel()
     val uiState by userGroupsViewModel.uiState.collectAsState()
-    // Derive values directly from uiState
+
     val userGroups = uiState.groups
-    val isLoading = uiState.isLoading
-    val isRefreshing = uiState.isRefreshing
+    val isLoading = uiState.isLoading // True only during initial load when list is potentially empty
+    val isRefreshing = uiState.isRefreshing // True only during pull-to-refresh action
     val error = uiState.error
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    // Pull-to-refresh state (Ensure imports are correct)
     val pullRefreshState = rememberPullRefreshState(
         refreshing = isRefreshing,
         onRefresh = { userGroupsViewModel.refresh() }
@@ -45,10 +47,7 @@ fun GroupsScreen(outerNavController: NavHostController) {
     LaunchedEffect(error) {
         error?.let { errorMessage ->
             scope.launch {
-                snackbarHostState.showSnackbar(
-                    message = errorMessage,
-                    duration = SnackbarDuration.Long
-                )
+                snackbarHostState.showSnackbar(errorMessage, duration = SnackbarDuration.Long)
                 userGroupsViewModel.clearError()
             }
         }
@@ -60,12 +59,14 @@ fun GroupsScreen(outerNavController: NavHostController) {
             TopAppBar(title = { Text("My Groups") })
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { outerNavController.navigate(Routes.CREATE_GROUP) },
-                // Render FAB based on whether initial load is done and there are groups or not
-                modifier = if (isLoading && userGroups.isEmpty()) Modifier.size(0.dp) else Modifier
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Create Group")
+            // Show FAB unless it's the very first load attempt
+            // Once loading is false, always show it, regardless of empty list or errors
+            if (!isLoading) {
+                FloatingActionButton(
+                    onClick = { outerNavController.navigate(Routes.CREATE_GROUP) },
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Create Group")
+                }
             }
         }
     ) { padding ->
@@ -73,28 +74,31 @@ fun GroupsScreen(outerNavController: NavHostController) {
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
-                // Apply pullRefresh modifier (Ensure import is correct)
                 .pullRefresh(pullRefreshState)
         ) {
             when {
                 // Initial Loading indicator
-                isLoading && userGroups.isEmpty() && !isRefreshing -> {
+                isLoading /* && userGroups.isEmpty() */ -> { // Simplified: Show loader whenever isLoading is true initially
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
                     }
                 }
-                // Empty State
+                // Empty State (Show ONLY if loading is finished AND list is empty AND not currently refreshing)
                 userGroups.isEmpty() && !isLoading && !isRefreshing -> {
-                    Box(modifier = Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
-                        Text(
-                            "You haven't joined any groups yet.\nUse the '+' button to create one or discover groups in the Home tab.",
-                            textAlign = TextAlign.Center,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Box( /* ... Empty State Column ... */
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 64.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.Groups, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+                            Spacer(Modifier.height(16.dp))
+                            Text("No Groups Yet", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
+                            Spacer(Modifier.height(8.dp))
+                            Text("Join groups from the 'Discover' tab or create your own using the '+' button.", textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
-                // Groups List
+                // Groups List (Show if not initial loading, even if refreshing, includes empty list during refresh)
                 else -> {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
@@ -105,9 +109,7 @@ fun GroupsScreen(outerNavController: NavHostController) {
                             GroupItem(
                                 group = group,
                                 joined = true,
-                                onActionClicked = {
-                                    outerNavController.navigate("${Routes.MESSAGES}/${group.id}")
-                                },
+                                onActionClicked = { outerNavController.navigate("${Routes.MESSAGES}/${group.id}") },
                                 actionText = "Open Chat"
                             )
                         }
@@ -115,12 +117,20 @@ fun GroupsScreen(outerNavController: NavHostController) {
                 }
             }
 
-            // PullRefreshIndicator (Ensure import is correct)
             PullRefreshIndicator(
                 refreshing = isRefreshing,
                 state = pullRefreshState,
-                modifier = Modifier.align(Alignment.TopCenter)
+                modifier = Modifier.align(Alignment.TopCenter),
             )
         }
+    }
+}
+
+// Example Preview (Unchanged)
+@Preview(showBackground = true)
+@Composable
+fun GroupsScreenPreview() {
+    NodicaTheme {
+        GroupsScreen(rememberNavController())
     }
 }

@@ -1,23 +1,28 @@
-// Corrected: main/java/com/jamie/nodica/features/groups/group/CreateGroupScreen.kt
+package com.jamie.nodica.features.groups.group // <-- ***** CORRECT PACKAGE *****
 
-package com.jamie.nodica.features.groups.group
-
+// Necessary Imports (Explicitly added)
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons // Import Icons
-import androidx.compose.material.icons.filled.Done // Import Done icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Done
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
-import androidx.compose.foundation.layout.FlowRow // Specific import
-import androidx.compose.foundation.layout.ExperimentalLayoutApi // Import layout API
-import androidx.compose.runtime.saveable.rememberSaveable // Import rememberSaveable
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.navigation.compose.rememberNavController
+import com.jamie.nodica.ui.theme.NodicaTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import timber.log.Timber
@@ -25,145 +30,209 @@ import timber.log.Timber
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun CreateGroupScreen(navController: NavController) {
+    // Koin should find the ViewModel defined for this scope/package
     val viewModel: CreateGroupViewModel = koinViewModel()
-    val creationState by viewModel.creationState.collectAsState()
-    val availableTags by viewModel.availableTags.collectAsState() // Observe available tags
+    // collectAsState should now work with the explicit import
+    val uiState by viewModel.uiState.collectAsState()
 
-    // Use rememberSaveable for simple state that needs to survive config changes/process death
+    // Accessing state properties - should resolve now
+    val availableTags = uiState.availableTags
+    val isLoadingTags = uiState.isLoadingTags
+    val operationState = uiState.opState
+    val generalError = uiState.error
+
+    // Form state remains the same
     var name by rememberSaveable { mutableStateOf("") }
     var description by rememberSaveable { mutableStateOf("") }
     var meetingSchedule by rememberSaveable { mutableStateOf("") }
-    var selectedTagIds by rememberSaveable { mutableStateOf(emptySet<String>()) } // Remember selected IDs
+    var selectedTagIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
 
-    // Snackbar for feedback
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    // Navigate back or show error on state change
-    LaunchedEffect(creationState) {
-        when (val state = creationState) {
-            is CreateGroupUiState.Success -> {
-                Timber.i("Group creation successful, navigating back.")
-                scope.launch { snackbarHostState.showSnackbar("Group '${state.group.name}' created!") }
-                kotlinx.coroutines.delay(300) // Allow snackbar to show briefly
-                // Navigate back to the previous screen (likely GroupsScreen or HomeScreen)
-                navController.popBackStack()
-                viewModel.resetState() // Reset state after handling
+    // Validation & Derived state - should resolve state classes now
+    val showValidationHints = operationState is CreateGroupOpState.ValidationError
+    val nameIsError = name.isBlank() && showValidationHints
+    val tagsAreError = selectedTagIds.isEmpty() && showValidationHints
+    val validationErrorMessage = (operationState as? CreateGroupOpState.ValidationError)?.message
+
+    // Effects - references to state classes and viewModel functions should resolve
+    LaunchedEffect(operationState) {
+        if (operationState is CreateGroupOpState.Success) {
+            Timber.i("Group creation successful (UI Effect), navigating back.")
+            scope.launch {
+                snackbarHostState.showSnackbar("Group '${operationState.group.name}' created!")
             }
-            is CreateGroupUiState.Error -> {
-                Timber.w("Group creation error: ${state.message}")
-                scope.launch { snackbarHostState.showSnackbar("Error: ${state.message}") }
-                // Don't reset automatically, allow user to retry
-            }
-            else -> { /* Idle or Loading */ }
+            delay(400)
+            navController.popBackStack()
+            viewModel.resetOperationState()
         }
     }
 
+    LaunchedEffect(generalError, operationState) {
+        val errorToShow = validationErrorMessage ?: generalError ?: (operationState as? CreateGroupOpState.Error)?.message
+        errorToShow?.let { message ->
+            scope.launch {
+                snackbarHostState.showSnackbar(
+                    message = message,
+                    duration = if(operationState is CreateGroupOpState.ValidationError) SnackbarDuration.Short else SnackbarDuration.Long
+                )
+                if (generalError != null) viewModel.clearError() else viewModel.resetOperationState()
+            }
+        }
+    }
+
+    // UI Scaffold and Column - references should resolve
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            CenterAlignedTopAppBar(title = { Text("Create New Group") })
+            TopAppBar(
+                title = { Text("Create New Study Group") },
+                navigationIcon = {
+                    IconButton(onClick = { navController.navigateUp() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
         }
     ) { padding ->
+        val scrollState = rememberScrollState()
         Column(
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
+                .verticalScroll(scrollState)
+                .padding(horizontal = 16.dp, vertical = 20.dp)
         ) {
+            // All UI elements... references to uiState, operationState, etc. should work.
+
+            Text("Group Details", style = MaterialTheme.typography.titleLarge)
+            Text("Starred (*) fields are required.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(modifier = Modifier.height(16.dp))
+
             OutlinedTextField(
-                value = name, onValueChange = { name = it },
+                value = name,
+                onValueChange = { name = it; viewModel.resetOperationState() }, // Reference should resolve
                 label = { Text("Group Name *") }, modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                isError = name.isBlank() && creationState is CreateGroupUiState.Error // Basic validation feedback
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next, capitalization = KeyboardCapitalization.Sentences),
+                singleLine = true,
+                isError = nameIsError,
+                supportingText = if(nameIsError) { { Text("Name is required", color = MaterialTheme.colorScheme.error) } } else null
             )
             Spacer(modifier = Modifier.height(12.dp))
 
             OutlinedTextField(
                 value = description, onValueChange = { description = it },
-                label = { Text("Description") }, modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next), maxLines = 4
+                label = { Text("Description (Goals, Topics, etc.)") }, modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next, capitalization = KeyboardCapitalization.Sentences),
+                maxLines = 4
             )
             Spacer(modifier = Modifier.height(12.dp))
 
             OutlinedTextField(
                 value = meetingSchedule, onValueChange = { meetingSchedule = it },
-                label = { Text("Meeting Schedule (Optional)") }, modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
+                label = { Text("Meeting Schedule (Optional)") }, placeholder = {Text("e.g., Tuesdays 7 PM UTC, Weekends")},
+                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
+                singleLine = true
             )
-            Spacer(modifier = Modifier.height(16.dp))
 
-            // --- Tag Selection Section ---
+            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             Text("Select Tags *", style = MaterialTheme.typography.titleLarge)
             Spacer(modifier = Modifier.height(8.dp))
 
-            val isTagsError = selectedTagIds.isEmpty() && creationState is CreateGroupUiState.Error
-
-            // Check if tags have loaded
-            if (availableTags.isEmpty()) { // Simplified check - assuming loading happens before screen is usable
-                // TODO: Add a loading indicator for tags if fetching is asynchronous
-                Text("Loading tags...", style = MaterialTheme.typography.bodyMedium)
-            } else {
-                availableTags.forEach { (category, tagsInCategory) ->
-                    Text(category, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp, bottom = 8.dp))
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        tagsInCategory.forEach { tag ->
-                            FilterChip(
-                                selected = tag.id in selectedTagIds,
-                                onClick = {
-                                    selectedTagIds = if (tag.id in selectedTagIds) selectedTagIds - tag.id else selectedTagIds + tag.id
-                                },
-                                label = { Text(tag.name) },
-                                leadingIcon = if (tag.id in selectedTagIds) { { Icon(Icons.Filled.Done, "Selected", Modifier.size(FilterChipDefaults.IconSize)) }} else null
-                            )
+            when {
+                isLoadingTags -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Loading subjects...")
+                    }
+                }
+                (generalError != null && availableTags.isEmpty()) -> {
+                    Text(
+                        generalError,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                availableTags.isEmpty() && !isLoadingTags -> {
+                    Text(
+                        "No suggested subjects available.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                else -> { // Display Tags
+                    availableTags.forEach { (category, tagsInCategory) ->
+                        Text(category, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp, bottom = 8.dp))
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            tagsInCategory.forEach { tag ->
+                                FilterChip(
+                                    selected = tag.id in selectedTagIds,
+                                    onClick = {
+                                        selectedTagIds = if (tag.id in selectedTagIds) selectedTagIds - tag.id else selectedTagIds + tag.id
+                                        if (operationState is CreateGroupOpState.ValidationError) viewModel.resetOperationState()
+                                    },
+                                    label = { Text(tag.name) },
+                                    leadingIcon = if (tag.id in selectedTagIds) { { Icon(Icons.Filled.Done, "Selected", Modifier.size(FilterChipDefaults.IconSize)) }} else null
+                                )
+                            }
                         }
+                    }
+                    if (tagsAreError) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            validationErrorMessage ?: "Please select at least one tag",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
                     }
                 }
             }
-            if (isTagsError) {
-                Spacer(Modifier.height(4.dp))
-                Text("Please select at least one tag", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
-            }
-            Spacer(modifier = Modifier.height(if (isTagsError) 24.dp else 32.dp))
 
-            // --- Create Button ---
-            val isLoading = creationState is CreateGroupUiState.Loading
+            Spacer(modifier = Modifier.height(32.dp))
+
+            val isCreating = operationState is CreateGroupOpState.Loading
+            val canProceed = !(availableTags.isEmpty() && !isLoadingTags && generalError != null)
+
             Button(
                 onClick = {
                     keyboardController?.hide()
-                    if (name.isNotBlank() && selectedTagIds.isNotEmpty()) {
-                        // FIX: Pass selectedTagIds to the correct parameter
-                        viewModel.createGroup(
-                            name = name,
-                            description = description,
-                            meetingSchedule = meetingSchedule,
-                            selectedTagIds = selectedTagIds.toList() // Pass the list of IDs
-                        )
-                    } else {
-                        scope.launch { snackbarHostState.showSnackbar("Please enter a name and select at least one tag.") }
-                    }
+                    viewModel.createGroup(
+                        name = name, description = description,
+                        meetingSchedule = meetingSchedule, selectedTagIds = selectedTagIds.toList()
+                    )
                 },
-                enabled = !isLoading && name.isNotBlank() && selectedTagIds.isNotEmpty(), // Add validation to enabled state
+                enabled = !isCreating && canProceed,
                 modifier = Modifier.fillMaxWidth().height(48.dp)
             ) {
-                if (isLoading) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(24.dp).padding(end = 8.dp))
-                    Text("Creating...")
+                if (isCreating) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(24.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Creating Group...")
+                    }
                 } else {
                     Text("Create Group")
                 }
             }
-            // Display general error message below button if needed
-            if (!isLoading && creationState is CreateGroupUiState.Error) {
-                Spacer(modifier = Modifier.height(8.dp))
-                // Text(text = (creationState as CreateGroupUiState.Error).message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) // Already shown in snackbar
-            }
+            Spacer(modifier = Modifier.height(16.dp))
         }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun CreateGroupScreenPreview(){
+    NodicaTheme {
+        CreateGroupScreen(rememberNavController())
     }
 }

@@ -3,24 +3,31 @@ package com.jamie.nodica.features.home
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue // Import required
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.navigation.NavDestination.Companion.hierarchy // Import required
-import androidx.navigation.NavGraph.Companion.findStartDestination // Import required
+import androidx.navigation.NavDestination.Companion.hierarchy
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.*
-import com.jamie.nodica.features.groups.group.GroupsScreen
-import com.jamie.nodica.features.messages.AggregatedMessagesScreen
-import com.jamie.nodica.features.profile_management.ProfileScreen // Import ProfileScreen
+import com.jamie.nodica.features.groups.group.GroupsScreen // My Groups List
+import com.jamie.nodica.features.messages.AggregatedMessagesScreen // Chat List
+import com.jamie.nodica.features.profile_management.ProfileScreen // Profile View/Edit
 
+/**
+ * The main container screen after authentication/setup, hosting the bottom navigation bar
+ * and the content for each primary section (Discover, My Groups, Chats, Profile).
+ *
+ * @param outerNavController The main application NavController, used by child screens
+ *                           to navigate to destinations outside this main structure (e.g., MessageScreen).
+ */
 @Composable
-fun MainScreen(outerNavController: NavHostController) { // Accept the outer NavController
-    // Internal NavController for managing the bottom bar destinations
+fun MainScreen(outerNavController: NavHostController) {
+    // This innerNavController manages navigation *between* the main bottom bar destinations.
     val innerNavController = rememberNavController()
 
     Scaffold(
         bottomBar = {
-            NavigationBar {
+            NavigationBar { // Use NavigationBar for Material 3
                 val navBackStackEntry by innerNavController.currentBackStackEntryAsState()
                 val currentDestination = navBackStackEntry?.destination
 
@@ -28,39 +35,53 @@ fun MainScreen(outerNavController: NavHostController) { // Accept the outer NavC
                     NavigationBarItem(
                         icon = { Icon(screen.icon, contentDescription = screen.label) },
                         label = { Text(screen.label) },
-                        // Check hierarchy for nested graph support (optional but good practice)
                         selected = currentDestination?.hierarchy?.any { it.route == screen.route } == true,
                         onClick = {
+                            // Navigate on the *inner* controller for tab switching
                             innerNavController.navigate(screen.route) {
-                                // Pop up to the start destination of the graph to
-                                // avoid building up a large stack of destinations
-                                // on the back stack as users select items
+                                // Pop up to the start destination of the inner graph to
+                                // avoid building up stack within tabs.
                                 popUpTo(innerNavController.graph.findStartDestination().id) {
-                                    saveState = true
+                                    saveState = true // Save state of popped destinations.
                                 }
-                                // Avoid multiple copies of the same destination when
-                                // re-selecting the same item
+                                // Avoid multiple copies of the same destination when re-selecting.
                                 launchSingleTop = true
-                                // Restore state when re-selecting a previously selected item
+                                // Restore state when re-navigating to a previously selected item.
                                 restoreState = true
                             }
-                        }
+                        },
+                        // Optional: customize colors for selected/unselected states
+                        // colors = NavigationBarItemDefaults.colors(...)
                     )
                 }
             }
         }
     ) { innerPadding ->
-        // Internal NavHost for the main tabs/sections
+        // This NavHost uses the innerNavController to display the content
+        // corresponding to the selected bottom navigation item.
         NavHost(
-            navController = innerNavController, // Use the internal controller here
-            startDestination = BottomNavItem.Home.route,
-            modifier = Modifier.padding(innerPadding) // Apply padding from Scaffold
+            navController = innerNavController,
+            startDestination = BottomNavItem.Home.route, // Start on Discover/Home tab
+            modifier = Modifier.padding(innerPadding) // Apply padding from Scaffold to avoid overlap
         ) {
-            // Pass the outerNavController to screens that need to navigate outside the tabs
-            composable(BottomNavItem.Home.route) { HomeScreen(outerNavController = outerNavController) }
-            composable(BottomNavItem.Groups.route) { GroupsScreen(outerNavController = outerNavController) }
-            composable(BottomNavItem.Chat.route) { AggregatedMessagesScreen(outerNavController = outerNavController) }
-            composable(BottomNavItem.Profile.route) { ProfileScreen(outerNavController = outerNavController) }
+            // Define composables for each bottom navigation destination.
+            // Pass the outerNavController to screens that might need to navigate globally.
+            composable(BottomNavItem.Home.route) {
+                // Content for the 'Discover' tab
+                HomeScreen(outerNavController = outerNavController)
+            }
+            composable(BottomNavItem.Groups.route) {
+                // Content for the 'My Groups' tab
+                GroupsScreen(outerNavController = outerNavController)
+            }
+            composable(BottomNavItem.Chat.route) {
+                // Content for the 'Chats' tab
+                AggregatedMessagesScreen(outerNavController = outerNavController)
+            }
+            composable(BottomNavItem.Profile.route) {
+                // Content for the 'Profile' tab
+                ProfileScreen(outerNavController = outerNavController)
+            }
         }
     }
 }

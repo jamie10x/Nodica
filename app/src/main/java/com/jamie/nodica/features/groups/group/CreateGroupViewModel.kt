@@ -1,82 +1,158 @@
-// main/java/com/jamie/nodica/features/groups/group/CreateGroupViewModel.kt
 package com.jamie.nodica.features.groups.group
 
+import androidx.compose.runtime.Immutable // Import Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.jamie.nodica.features.profile.TagItem // Import if needed, maybe not
+import com.jamie.nodica.features.profile.TagItem
 import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.auth.auth // Import auth extension
+import io.github.jan.supabase.postgrest.from
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import timber.log.Timber
 
+// --- State Definitions (Moved to Top-Level in this file) ---
+
+@Immutable // Add Immutable annotation HERE
+data class CreateGroupScreenState(
+    val availableTags: Map<String, List<TagItem>> = emptyMap(),
+    val isLoadingTags: Boolean = true,
+    val opState: CreateGroupOpState = CreateGroupOpState.Idle,
+    val error: String? = null
+)
+
+sealed class CreateGroupOpState {
+    object Idle : CreateGroupOpState()
+    object Loading : CreateGroupOpState()
+    data class ValidationError(val message: String) : CreateGroupOpState()
+    data class Success(val group: Group) : CreateGroupOpState()
+    data class Error(val message: String) : CreateGroupOpState()
+}
+
+// --- ViewModel Definition ---
+
 class CreateGroupViewModel(
     private val groupUseCase: GroupUseCase,
-    private val currentUserId: String,
-    supabaseClient: SupabaseClient
+    private val supabaseClient: SupabaseClient
 ) : ViewModel() {
 
-    private val _creationState = MutableStateFlow<CreateGroupUiState>(CreateGroupUiState.Idle)
-    val creationState: StateFlow<CreateGroupUiState> get() = _creationState.asStateFlow()
+    private val _uiState = MutableStateFlow(CreateGroupScreenState())
+    val uiState: StateFlow<CreateGroupScreenState> = _uiState.asStateFlow()
 
-    // Need to fetch available tags similar to ProfileViewModel if using chips
-    private val _availableTags = MutableStateFlow<Map<String, List<TagItem>>>(emptyMap())
-    val availableTags: StateFlow<Map<String, List<TagItem>>> get() = _availableTags.asStateFlow()
-
-    init {
-        // TODO: Fetch available tags from a shared repository/use case if needed for selection UI
-        // fetchAvailableTags()
-        Timber.d("CreateGroupViewModel initialized for user $currentUserId")
+    // Function to safely get user ID or update state with error
+    private fun getCurrentUserIdOrSetError(): String? {
+        val userId = supabaseClient.auth.currentUserOrNull()?.id
+        if (userId == null) {
+            Timber.e("CreateGroup: User not logged in.")
+            // Update state correctly if user is null
+            _uiState.update { prevState ->
+                // Avoid infinite loops if already in error state
+                if (prevState.opState !is CreateGroupOpState.Error || prevState.error != "Authentication error.") {
+                    prevState.copy(
+                        opState = CreateGroupOpState.Error("You must be logged in to create a group."),
+                        error = "Authentication error.",
+                        isLoadingTags = false // Ensure loading stops
+                    )
+                } else {
+                    prevState
+                }
+            }
+        }
+        return userId
     }
 
-    // TODO: Implement fetchAvailableTags if using dynamic chip selection
-    // private fun fetchAvailableTags() { ... }
 
+    init {
+        Timber.d("CreateGroupViewModel initialized.")
+        // Check login status before fetching tags
+        if (getCurrentUserIdOrSetError() != null) {
+            fetchAvailableTags()
+        } else {
+            // Ensure loading stops if user wasn't logged in on init
+            _uiState.update { it.copy(isLoadingTags = false) }
+        }
+    }
+
+    private fun fetchAvailableTags() {
+        _uiState.update { it.copy(isLoadingTags = true, error = null) }
+        viewModelScope.launch {
+            try {
+                val tags = supabaseClient.from("tags").select().decodeList<TagItem>()
+                val tagsByCategory = tags
+                    .groupBy { it.category.uppercase() }
+                    .toSortedMap()
+                    .mapValues { entry -> entry.value.sortedBy { it.name } }
+
+                _uiState.update { it.copy(availableTags = tagsByCategory, isLoadingTags = false) }
+                Timber.i("Fetched ${tags.size} tags for Create Group screen.")
+            } catch (e: Exception) {
+                Timber.e(e, "Error fetching available tags for Create Group")
+                _uiState.update { it.copy(
+                    isLoadingTags = false,
+                    error = "Failed to load available subjects: ${e.message}"
+                ) }
+            }
+        }
+    }
 
     fun createGroup(
         name: String,
         description: String,
         meetingSchedule: String,
-        selectedTagIds: List<String> // Accept Tag IDs from UI
+        selectedTagIds: List<String>
     ) {
-        _creationState.value = CreateGroupUiState.Loading
-        Timber.d("Attempting to create group. Name: $name, Tags: $selectedTagIds")
+        val currentUserId = getCurrentUserIdOrSetError() ?: return // Exit if user ID is null
+
+        val trimmedName = name.trim()
+        if (trimmedName.isBlank()) {
+            _uiState.update { it.copy(opState = CreateGroupOpState.ValidationError("Group name cannot be empty.")) }
+            return
+        }
+        if (selectedTagIds.isEmpty()) {
+            _uiState.update { it.copy(opState = CreateGroupOpState.ValidationError("Please select at least one tag.")) }
+            return
+        }
+
+        _uiState.update { it.copy(opState = CreateGroupOpState.Loading, error = null) }
+        Timber.d("Attempting to create group. Name: $trimmedName, Tags: $selectedTagIds")
+
         viewModelScope.launch {
-            // Build the basic group object. ID is generated by DB.
-            // The 'tags' field in Group object isn't directly saved; pass tagIds separately.
-            val newGroup = Group(
-                id = "", // Let Supabase generate the id
-                name = name.trim(),
-                description = description.trim(),
+            val newGroupData = Group(
+                id = "", name = trimmedName, description = description.trim(),
                 meetingSchedule = meetingSchedule.trim().ifBlank { null },
-                creatorId = currentUserId,
-                tags = emptyList() // This list isn't used directly in insert, pass IDs below
-                // member count is handled by repository/DB trigger
+                creatorId = currentUserId, // Use fetched ID
+                tags = emptyList(), membersRelation = emptyList()
             )
 
-            // Call the use case with the Group object and the selected Tag IDs
-            groupUseCase.createGroup(newGroup, selectedTagIds).fold(
+            groupUseCase.createGroup(newGroupData, selectedTagIds.distinct()).fold(
                 onSuccess = { createdGroup ->
                     Timber.i("Group created successfully: ${createdGroup.id}")
-                    _creationState.value = CreateGroupUiState.Success(createdGroup)
+                    _uiState.update { it.copy(opState = CreateGroupOpState.Success(createdGroup)) }
                 },
                 onFailure = { error ->
                     Timber.e(error, "Failed to create group")
-                    _creationState.value = CreateGroupUiState.Error(error.message ?: "Error creating group")
+                    _uiState.update { it.copy(opState = CreateGroupOpState.Error(error.message ?: "Error creating group")) }
                 }
             )
         }
     }
 
-    fun resetState() {
-        _creationState.value = CreateGroupUiState.Idle
+    fun resetOperationState() {
+        if (_uiState.value.opState != CreateGroupOpState.Idle) {
+            _uiState.update { it.copy(opState = CreateGroupOpState.Idle) }
+        }
     }
-}
 
-sealed class CreateGroupUiState {
-    object Idle : CreateGroupUiState()
-    object Loading : CreateGroupUiState()
-    data class Success(val group: Group) : CreateGroupUiState()
-    data class Error(val message: String) : CreateGroupUiState()
+    fun clearError() {
+        if (_uiState.value.error != null) {
+            _uiState.update { it.copy(error = null) }
+        }
+        // Reset validation state as well when clearing general error
+        if (_uiState.value.opState is CreateGroupOpState.ValidationError) {
+            resetOperationState()
+        }
+    }
 }

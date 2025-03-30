@@ -1,218 +1,179 @@
-// Corrected: main/java/com/jamie/nodica/features/groups/group/SupabaseGroupRepository.kt
-
 package com.jamie.nodica.features.groups.group
 
 import io.github.jan.supabase.SupabaseClient
-import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.annotations.SupabaseInternal
+import io.github.jan.supabase.exceptions.RestException
+import io.github.jan.supabase.postgrest.postgrest // Import postgrest explicitly
 import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.postgrest.query.Count
 import io.github.jan.supabase.postgrest.query.Order
-import io.github.jan.supabase.postgrest.query.filter.FilterOperation // Import needed for operators
-import io.github.jan.supabase.postgrest.query.filter.FilterOperator // Import needed for operators
-import kotlinx.serialization.SerialName // Import for SerialName
+import io.github.jan.supabase.supabaseJson
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import timber.log.Timber
 
 // Represents the response when fetching group memberships with nested group data
 @Serializable
-data class UserGroupMembershipResponse(
-    // Can select specific columns if needed, but '*' for the nested group is often fine
-    // Ensure the 'groups' field name matches the table name used in the foreign key relation
-    val groups: Group? = null
+private data class UserGroupMembershipResponse(
+    val groups: Group? = null // Groups is nullable in case the join fails or group deleted
 )
 
-// Represents the structure of the group_members table
+// Represents the structure of the group_members table for insertion
 @Serializable
-data class GroupMembership(
-    // Use camelCase for Kotlin properties, map to snake_case for DB with @SerialName
-    @SerialName("user_id")
-    val userId: String,
-    @SerialName("group_id")
-    val groupId: String
-    // @SerialName("joined_at")
-    // val joinedAt: String? = null // Can add if needed
+private data class GroupMembershipInsert(
+    // Use snake_case as expected by DB insert, Kotlin convention warnings can be suppressed if desired
+    val user_id: String,
+    val group_id: String
 )
 
-class SupabaseGroupRepository(private val client: SupabaseClient) : GroupRepository {
+// Custom exception for already joined scenario
+class AlreadyJoinedException(message: String) : Exception(message)
 
-    /**
-     * Fetches groups, allowing filtering by name and tags, and excluding groups the user has already joined.
-     * Populates the tags list by fetching related tags via the group_tags pivot table.
-     */
+class SupabaseGroupRepository(supabaseClient: SupabaseClient) : GroupRepository {
+
+    private val db = supabaseClient.postgrest // Convenience accessor for postgrest
+
     override suspend fun fetchDiscoverGroups(
         searchQuery: String,
         tagQuery: String,
-        currentUserId: String // To exclude joined groups
     ): List<Group> {
-        Timber.d("Fetching discover groups. Search: '$searchQuery', Tag: '$tagQuery', User: $currentUserId")
+        val cleanedSearch = searchQuery.trim()
+        val cleanedTag = tagQuery.trim()
+        Timber.d("Repo: Fetching discover groups. Search: '$cleanedSearch', Tag: '$cleanedTag'")
         return try {
-            client.from("groups").select(
-                // Fetch group columns and related tag names
-                // Select group data, member count, and associated tag names
-                columns = Columns.raw("*, member_count:group_members(count), tags:group_tags!inner(tags(name))")
-            ) {
-                // Apply filters
-                if (searchQuery.isNotBlank()) {
-                    // Use 'ilike' for case-insensitive partial matching on group name
-                    filter {
-                        ilike("name", "%${searchQuery}%")
-                    }
-                }
-                if (tagQuery.isNotBlank()) {
-                    // **FIX:** Correct syntax for filtering on related table 'tags' via 'group_tags' join
-                    // Reference the joined table 'tags' and its column 'name'
-                    // Use the filter block and specify the foreign table path
-                    filter {
-                        // The syntax often looks like foreignTable!joinTable(column).operator(value)
-                        // Or directly referencing the path used in the select alias
-                        // Note: Direct filtering on relation names like this might be complex/version-dependent.
-                        // RPC might be more reliable for complex filtering. Trying common syntax:
-                        ilike("tags.name", "%${tagQuery}%") // Use dot notation referencing the alias path
-                        // Alternative if above doesn't work:
-                        // foreignTable("tags") { // Specify foreign table
-                        //     ilike("name", "%${tagQuery}%")
-                        // }
-                    }
-                }
+            val selectQuery = "*, member_count:group_members(count), tags:group_tags!inner(tags(name))"
 
-                // Local filtering for excluding joined groups is handled in ViewModel now
-
-                order("created_at", Order.DESCENDING) // Order by creation date
-                // limit(20) // Add pagination later if needed
-            }.decodeList<Group>() // Decode into the Group data class
+            db.from("groups").select(columns = Columns.raw(selectQuery)) {
+                // Apply filters using the filter DSL block
+                filter {
+                    if (cleanedSearch.isNotBlank()) {
+                        // Filter on the 'name' column of the 'groups' table
+                        ilike("name", "%${cleanedSearch}%")
+                    }
+                    if (cleanedTag.isNotBlank()) {
+                        // **CORRECTED SYNTAX**: Filter on the 'name' column of the related 'tags' table
+                        // The path "tags.name" refers to the joined relation path.
+                        ilike("tags.name", "%${cleanedTag}%")
+                    }
+                    // You can chain multiple conditions like:
+                    // eq("some_other_column", someValue)
+                }
+                order("created_at", Order.DESCENDING)
+                limit(50) // Limit results for discovery performance
+            }.decodeList<Group>()
 
         } catch (e: Exception) {
-            Timber.e(e, "Error fetching discover groups")
-            // Specific error handling or re-throwing
-            throw Exception("Error fetching groups: ${e.message}")
+            Timber.e(e, "Repo: Error fetching discover groups")
+            throw Exception("Could not fetch groups: ${e.message}")
         }
     }
 
-
-    /**
-     * Fetches the groups a specific user is a member of.
-     * Includes related tag names for each group.
-     */
     override suspend fun fetchUserGroups(userId: String): List<Group> {
-        Timber.d("Fetching groups for user: $userId")
+        Timber.d("Repo: Fetching groups for user: $userId")
         return try {
-            val response = client.from("group_members").select(
-                // Select the nested group ('*'), its member count, and its tags
-                // Ensure 'groups' foreign key and 'group_tags' are correctly set up in Supabase
+            val response = db.from("group_members").select(
                 columns = Columns.raw("groups!inner(*, member_count:group_members(count), tags:group_tags(tags(name)))")
             ) {
                 filter { eq("user_id", userId) }
-            }.decodeList<UserGroupMembershipResponse>() // Decode into the helper response class
+                order("groups.name", Order.ASCENDING) // Order user's groups by name
+            }.decodeList<UserGroupMembershipResponse>()
 
-            // Extract the non-null Group objects from the response
-            response.mapNotNull { membership -> membership.groups }
+            response.mapNotNull { it.groups }
 
         } catch (e: Exception) {
-            Timber.e(e, "Error fetching user groups for user $userId")
-            throw Exception("Error fetching user groups: ${e.message}")
+            Timber.e(e, "Repo: Error fetching user groups for user $userId")
+            throw Exception("Could not load your groups: ${e.message}")
         }
     }
 
-    /**
-     * Adds a user to a group by inserting into the group_members table.
-     * Performs a check to prevent duplicate entries.
-     */
     override suspend fun joinGroup(groupId: String, userId: String): Result<Unit> {
-        Timber.d("Attempting to join group $groupId for user $userId")
+        Timber.d("Repo: Attempting to join group $groupId for user $userId")
         return try {
-            // Check if membership already exists using count
-            val existingCount = client.from("group_members")
+            val existingCount = db.from("group_members")
                 .select {
                     filter {
                         eq("group_id", groupId)
                         eq("user_id", userId)
                     }
-                    limit(1)
-                    count(Count.EXACT) // Efficiently check existence
-                }.countOrNull() // Use countOrNull to handle potential errors gracefully
+                    count(Count.EXACT)
+                }.countOrNull()
 
-            if (existingCount == null || existingCount == 0L) {
-                // Insert new membership using corrected GroupMembership class
-                client.from("group_members")
-                    .insert(GroupMembership(userId = userId, groupId = groupId)) // Use camelCase here
-                Timber.i("User $userId successfully joined group $groupId")
-                Result.success(Unit)
-            } else {
+            if (existingCount != null && existingCount > 0) {
                 Timber.w("User $userId already a member of group $groupId")
-                Result.failure(Exception("Already joined this group"))
+                return Result.failure(AlreadyJoinedException("You are already a member of this group."))
             }
+
+            // Use the private data class with snake_case if needed by insert
+            db.from("group_members").insert(GroupMembershipInsert(user_id = userId, group_id = groupId))
+            Timber.i("User $userId successfully joined group $groupId")
+            Result.success(Unit)
+
+        } catch (e: RestException) {
+            Timber.e(e, "Repo: DB error joining group $groupId for user $userId")
+            Result.failure(Exception("Database error joining group: ${e.description ?: e.message}"))
         } catch (e: Exception) {
-            Timber.e(e, "Error joining group $groupId for user $userId")
-            Result.failure(Exception("Failed to join group: ${e.message}")) // More user-friendly msg
+            Timber.e(e, "Repo: Generic error joining group $groupId for user $userId")
+            Result.failure(Exception("Could not join group: ${e.message}"))
         }
     }
 
-    /**
-     * Creates a new group and optionally adds its tags to the group_tags table.
-     */
+    @OptIn(SupabaseInternal::class)
     override suspend fun createGroup(group: Group, tagIds: List<String>): Result<Group> {
-        Timber.d("Creating group: Name='${group.name}', Creator='${group.creatorId}', Tags='${tagIds}'")
+        val creatorId = group.creatorId ?: return Result.failure(IllegalArgumentException("Creator ID cannot be null"))
+        Timber.d("Repo: Calling create_group_and_add_tags RPC. Name='${group.name}', Creator='$creatorId', Tags='${tagIds}'")
+
         return try {
-            // 1. Insert the basic group information
-            // Ensure Group data class doesn't try to serialize fields not in the DB table 'groups' directly
-            val groupDataForInsert = mapOf(
-                "name" to group.name,
-                "description" to group.description,
-                "meeting_schedule" to group.meetingSchedule,
-                "creator_id" to group.creatorId
-                // Don't include 'id', 'tags', 'members', 'createdAt' if handled by DB/separate steps
-            )
-
-            val createdGroupResult = client.from("groups")
-                .insert(groupDataForInsert) { // Insert the map
-                    // Select the needed columns of the newly created row
-                    select(Columns.list("id", "name", "description", "meeting_schedule", "creator_id", "created_at"))
-                }
-                .decodeSingle<Group>() // Decode the result (Ensure Group class matches selected columns + defaults)
-
-            Timber.i("Group created with ID: ${createdGroupResult.id}")
-
-            // 2. Add the creator as the first member
-            // Can fail if joinGroup fails, needs transaction ideally
-            joinGroup(createdGroupResult.id, createdGroupResult.creatorId ?: throw IllegalStateException("Creator ID missing after group creation"))
-                .onFailure { throw it } // Propagate error if creator can't join
-            Timber.d("Added creator ${createdGroupResult.creatorId} to group ${createdGroupResult.id}")
-
-            // 3. Insert entries into group_tags pivot table
-            if (tagIds.isNotEmpty()) {
-                val groupTagLinks = tagIds.map { tagId ->
-                    mapOf("group_id" to createdGroupResult.id, "tag_id" to tagId)
-                }
-                client.from("group_tags").insert(groupTagLinks)
-                Timber.d("Added ${groupTagLinks.size} tags to group ${createdGroupResult.id}")
+            val rpcParams = buildJsonObject {
+                put("p_name", group.name)
+                put("p_description", group.description)
+                put("p_meeting_schedule", group.meetingSchedule)
+                put("p_creator_id", creatorId)
+                put("p_tag_ids", Json.encodeToString(tagIds.distinct()))
             }
+            Timber.v("RPC Params: $rpcParams")
 
-            // 4. Fetch the complete group data again to include tags and accurate member count
-            val finalGroup = fetchGroupById(createdGroupResult.id)
-                ?: throw Exception("Failed to fetch group details after creation.") // Throw error if fetch fails
+            val result = db.rpc("create_group_and_add_tags", rpcParams)
+            Timber.v("RPC Result Data: ${result.data}")
+
+            val resultBody = supabaseJson.parseToJsonElement(result.data)
+            val newGroupId = resultBody.jsonObject["new_group_id"]?.jsonPrimitive?.contentOrNull
+                ?: throw Exception("RPC 'create_group_and_add_tags' did not return the 'new_group_id'. Response: ${result.data}")
+
+            Timber.i("Group created via RPC with ID: $newGroupId")
+
+            val finalGroup = fetchGroupById(newGroupId)
+                ?: throw Exception("Failed to fetch group details after RPC creation (ID: $newGroupId).")
 
             Result.success(finalGroup)
 
+        } catch (e: RestException) {
+            Timber.e(e, "Repo: DB error calling create_group_and_add_tags RPC")
+            Result.failure(Exception("Database error creating group: ${e.description ?: e.message}"))
         } catch (e: Exception) {
-            Timber.e(e, "Error creating group '${group.name}'")
+            Timber.e(e, "Repo: Generic error creating group via RPC '${group.name}'")
             Result.failure(Exception("Error creating group: ${e.message}"))
         }
     }
 
-    // Helper function to fetch details of a single group (including tags and member count)
     override suspend fun fetchGroupById(groupId: String): Group? {
-        Timber.d("Fetching group by ID: $groupId")
+        Timber.d("Repo: Fetching group by ID: $groupId")
         return try {
-            client.from("groups")
+            db.from("groups")
                 .select(Columns.raw("*, member_count:group_members(count), tags:group_tags(tags(name))")) {
                     filter { eq("id", groupId) }
-                    limit(1) // Ensure only one is expected
-                    // Use maybeSingle() to return null instead of throwing exception if 0 rows
-                }
-                .decodeSingleOrNull<Group>() // Use decodeSingleOrNull which returns null on 0 rows
+                    limit(1)
+                }.decodeSingleOrNull<Group>()
+        } catch (e: RestException) {
+            Timber.e(e, "Repo: RestException fetching group by ID $groupId. Code: ${e.statusCode}, Message: ${e.message}")
+            null
         } catch (e: Exception) {
-            Timber.e(e, "Error fetching group by ID $groupId")
-            null // Return null on error
+            Timber.e(e, "Repo: Generic error fetching group by ID $groupId")
+            null
         }
     }
 }

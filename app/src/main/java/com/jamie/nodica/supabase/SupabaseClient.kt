@@ -13,47 +13,62 @@ import kotlinx.serialization.json.Json
 import timber.log.Timber
 
 /**
-
-Provides a configured instance of [SupabaseClient] using values from BuildConfig.
-
-Keys are securely injected via BuildConfig.
-
-IMPORTANT: For production, ensure Row Level Security (RLS) is ENABLED on all tables
-
-in your Supabase dashboard to prevent unauthorized data access.
-
-SECURITY NOTE: While BuildConfig is convenient for development, consider more robust
-
-key management solutions (like secrets managers or CI/CD environment variables) for production builds.
-
-Refer to Android BuildConfig {🔑} secure BuildConfig injection.
-
-@param context The application context (can be injected via Koin).
-
-@return A fully configured [SupabaseClient] instance.
+ * Provides a configured instance of [SupabaseClient] using values from BuildConfig.
+ *
+ * Keys are securely injected via BuildConfig during the build process.
+ * Refer to Android documentation on securing keys in build files.
+ *
+ * IMPORTANT: Ensure Row Level Security (RLS) is ENABLED on all sensitive tables
+ * in your Supabase dashboard to prevent unauthorized data access from the client-side key.
+ *
+ * @param context The application context (injected via Koin).
+ * @return A fully configured [SupabaseClient] instance.
+ * @throws IllegalArgumentException if SUPABASE_URL or SUPABASE_ANON_KEY are missing in BuildConfig.
  */
 fun provideSupabaseClient(context: Context): SupabaseClient {
-    Timber.d("Initializing SupabaseClient...") // Added log for initialization tracking
-    return createSupabaseClient(
-        supabaseUrl = BuildConfig.SUPABASE_URL, supabaseKey = BuildConfig.SUPABASE_ANON_KEY
-    ) {
-// Install the authentication module for user management
-        install(Auth)
-// Install the PostgREST module for database operations
-        install(Postgrest)
-// Install the Realtime module for live data updates
-        install(Realtime)
-// Install the Storage module for handling file uploads/downloads
-        install(Storage)
-// Configure the default JSON serializer
-// Allowing leniency and ignoring unknown keys can help prevent crashes
-// if the backend adds fields the client doesn't know about yet.
-        defaultSerializer = KotlinXSerializer(Json {
-            ignoreUnknownKeys = true
-            isLenient = true // Good for slightly malformed JSON, but use with caution.
-        })
+    // Validate keys early - ensures build configuration is correct.
+    require(BuildConfig.SUPABASE_URL.isNotBlank()) { "Supabase URL not found in BuildConfig." }
+    require(BuildConfig.SUPABASE_ANON_KEY.isNotBlank()) { "Supabase Anon Key not found in BuildConfig." }
 
-// Consider adding further configuration here if needed, e.g., custom headers, etc.
+    Timber.d("Initializing SupabaseClient for URL: ${BuildConfig.SUPABASE_URL}")
+
+    return createSupabaseClient(
+        supabaseUrl = BuildConfig.SUPABASE_URL,
+        supabaseKey = BuildConfig.SUPABASE_ANON_KEY
+    ) {
+        // Install required Supabase modules
+        install(Auth) {
+            // Auth configuration options (e.g., storage, deep links) can be added here if needed
+            // scheme = "nodica"
+            // host = "auth-callback"
+            Timber.v("Supabase Auth module installed.")
+        }
+        install(Postgrest) {
+            // Postgrest configuration (e.g., default schema)
+            // defaultSchema = "public"
+            Timber.v("Supabase Postgrest module installed.")
+        }
+        install(Realtime) {
+            // Realtime configuration (e.g., reconnect delays, heartbeat interval)
+            Timber.v("Supabase Realtime module installed.")
+        }
+        install(Storage) {
+            // Storage configuration (e.g., default bucket)
+            Timber.v("Supabase Storage module installed.")
+        }
+
+        // Configure the default JSON serializer
+        // Allowing leniency and ignoring unknown keys increases robustness against API changes.
+        defaultSerializer = KotlinXSerializer(Json {
+            encodeDefaults = true // Ensure default values are encoded if needed
+            ignoreUnknownKeys = true // Prevents crashes if backend adds new fields
+            isLenient = true // Allows slightly non-standard JSON, use cautiously
+        })
+        Timber.v("Supabase KotlinXSerializer configured.")
+
+        // Consider adding further configuration here if needed, e.g., custom headers
+        // httpConfig { // Example
+        //    customRequestHeaders = mapOf("X-Custom-Header" to "SomeValue")
+        // }
     }
 }
-

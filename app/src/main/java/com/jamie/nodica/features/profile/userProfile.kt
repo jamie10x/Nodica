@@ -1,53 +1,88 @@
 package com.jamie.nodica.features.profile
 
-// Create a separate file for the UserProfile data class for better organization.
-import kotlinx.serialization.SerialName // Import for mapping Kotlin names to DB names
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.datetime.Instant
 
+/**
+ * Represents the data structure for the 'users' table in Supabase.
+ * Includes fields for profile information.
+ */
 @Serializable
 data class UserProfile(
-// id and email are often implicit from the auth user or session,
-// but defining them here allows decoding the full row if needed.
-    val id: String, // Should match Supabase 'users.id' (usually UUID)
-    val email: String? = null, // Make nullable if not always selecting/required
-
-    val name: String, // DB: name (text)
-
-// Use @SerialName to map Kotlin camelCase to DB snake_case if names differ.
+    val id: String,
+    val email: String? = null,
+    var name: String,
     @SerialName("institution")
-    val school: String? = null, // Kotlin: school, DB: institution (text)
-
+    var school: String? = null,
     @SerialName("preferred_time")
-    val preferredTime: String? = null, // Kotlin: preferredTime, DB: preferred_time (text)
-
+    var preferredTime: String? = null,
     @SerialName("study_goals")
-    val studyGoals: String? = null, // Kotlin: studyGoals, DB: study_goals (text)
-
-// Add other fields from the 'users' table if needed, e.g., profile picture URL
+    var studyGoals: String? = null,
     @SerialName("profile_picture_url")
-    val profilePictureUrl: String? = null,
-
-    @SerialName("created_at") // Keep track of when the profile was created/updated
-    val createdAt: String? = null // Use kotlinx-datetime Instant if parsing dates/times
+    var profilePictureUrl: String? = null,
+    @SerialName("created_at")
+    val createdAt: Instant? = null
 )
 
-// Data class for tags - used in both profile setup and management
+/**
+ * Represents the data structure for the 'tags' table in Supabase.
+ */
 @Serializable
 data class TagItem(
-    val id: String, // UUID from DB
+    val id: String,
     val name: String,
-    val category: String, // e.g., "Science", "Mathematics"
+    val category: String,
     @SerialName("created_at")
-    val createdAt: String? = null
+    val createdAt: Instant? = null
 )
 
-// Data class representing the user_tags pivot table entry
+/**
+ * Represents the structure of the 'user_tags' many-to-many join table.
+ * Used primarily for relational queries or if direct interaction with the table is needed.
+ */
 @Serializable
 data class UserTagLink(
     @SerialName("user_id")
     val userId: String,
     @SerialName("tag_id")
-    val tagId: String,
-// You might embed the related TagItem here if fetching with joins
-// val tag: TagItem? = null
+    val tagId: String
+)
+
+/**
+ * Represents the structure required for fetching the profile along with associated tag IDs,
+ * often used in profile management view models. This combines UserProfile data with
+ * the IDs from the UserTagLink relation.
+ */
+@Serializable
+data class UserProfileWithTags(
+    val id: String,
+    val name: String,
+    val email: String? = null,
+    @SerialName("institution")
+    val school: String? = null,
+    @SerialName("preferred_time")
+    val preferredTime: String? = null,
+    @SerialName("study_goals")
+    val studyGoals: String? = null,
+    @SerialName("profile_picture_url")
+    val profilePictureUrl: String? = null,
+    @SerialName("created_at")
+    val createdAt: Instant? = null,
+
+    @SerialName("user_tags")
+    val tagLinks: List<UserTagIdOnlyLink> = emptyList()
+) {
+    val tagIds: Set<String>
+        get() = tagLinks.map { it.tagId }.toSet()
+}
+
+/**
+ * Helper data class specifically for decoding the result of a select query
+ * like `user_tags(tag_id)`. Only contains the tagId.
+ */
+@Serializable
+data class UserTagIdOnlyLink(
+    @SerialName("tag_id")
+    val tagId: String
 )

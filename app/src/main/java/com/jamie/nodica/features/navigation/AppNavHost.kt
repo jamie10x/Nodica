@@ -10,14 +10,19 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.jamie.nodica.features.auth.AuthScreen
 import com.jamie.nodica.features.auth.OnboardingScreen
-import com.jamie.nodica.features.home.MainScreen // Import MainScreen
+import com.jamie.nodica.features.groups.group.CreateGroupScreen
+import com.jamie.nodica.features.home.MainScreen // Import MainScreen, which contains bottom nav
 import com.jamie.nodica.features.messages.MessageScreen
 import com.jamie.nodica.features.profile.ProfileSetupScreen
 import com.jamie.nodica.features.splash.SplashScreen
-import com.jamie.nodica.features.groups.group.CreateGroupScreen
-// import com.jamie.nodica.features.home.BottomNavItem // Not needed here
-// import com.jamie.nodica.features.profile_management.ProfileScreen // Profile is inside MainScreen now
+import timber.log.Timber
 
+/**
+ * Defines the main navigation graph for the application.
+ *
+ * @param navController The primary NavHostController for the application.
+ * @param modifier Modifier for the NavHost container.
+ */
 @Composable
 fun AppNavHost(
     navController: NavHostController,
@@ -25,44 +30,63 @@ fun AppNavHost(
 ) {
     NavHost(
         navController = navController,
-        startDestination = Routes.SPLASH, // Assuming Splash handles auth check
+        startDestination = Routes.SPLASH, // Start with splash for auth/profile check
         modifier = modifier
     ) {
-        composable(Routes.SPLASH) { SplashScreen(navController) }
-        composable(Routes.ONBOARDING) { OnboardingScreen(navController) }
-        composable(Routes.AUTH) { AuthScreen(navController) }
-        composable(Routes.PROFILE_SETUP) { ProfileSetupScreen(navController) }
+        // Initial screens
+        composable(Routes.SPLASH) {
+            Timber.v("Navigating to Splash")
+            SplashScreen(navController)
+        }
 
-        // Route for the main screen containing bottom navigation
+        composable(Routes.ONBOARDING) {
+            Timber.v("Navigating to Onboarding")
+            OnboardingScreen(navController)
+        }
+        composable(Routes.AUTH) {
+            Timber.v("Navigating to Auth")
+            AuthScreen(navController)
+        }
+        composable(Routes.PROFILE_SETUP) {
+            Timber.v("Navigating to Profile Setup")
+            ProfileSetupScreen(navController)
+        }
+
+        // Main application hub screen with bottom navigation
         composable(Routes.HOME) {
-            // Pass the AppNavHost's NavController to MainScreen
+            Timber.v("Navigating to Home (MainScreen)")
+            // MainScreen manages its own internal navigation for the bottom bar tabs.
+            // Pass the main navController (as outerNavController) to allow tabs
+            // to navigate to destinations outside the bottom nav structure (e.g., MessageScreen).
             MainScreen(outerNavController = navController)
         }
 
-        // Route for individual message screens (navigated FROM within MainScreen's tabs)
+        // Detail screen for individual group messages
         composable(
             route = "${Routes.MESSAGES}/{groupId}",
             arguments = listOf(navArgument("groupId") { type = NavType.StringType })
         ) { backStackEntry ->
             val groupId = backStackEntry.arguments?.getString("groupId")
+            Timber.v("Navigating to Messages for groupId: $groupId")
             if (groupId != null) {
-                // Pass the AppNavHost's NavController for potential "up" navigation
+                // MessageScreen uses the main navController for 'Up' navigation.
                 MessageScreen(navController = navController, groupId = groupId)
             } else {
-                // Handle missing group ID - navigate back or show error
-                Text("Error: Group ID missing.")
-                // Consider navController.popBackStack() here
+                // Fallback if groupId is missing (should ideally not happen with proper navigation calls)
+                Timber.e("Error: MessageScreen destination called without groupId argument.")
+                Text("Error: Group ID missing.") // Simple error display
+                // Consider navigating back automatically: LaunchedEffect(Unit) { navController.popBackStack() }
             }
         }
 
-        // Route for creating a group (navigated FROM within MainScreen's tabs)
+        // Screen for creating a new group
         composable(Routes.CREATE_GROUP) {
-            // Pass the AppNavHost's NavController for navigation
+            Timber.v("Navigating to Create Group")
+            // CreateGroupScreen uses the main navController to navigate 'Up' or back on completion.
             CreateGroupScreen(navController = navController)
         }
 
-        // Note: The routes for the individual tabs (Home, Groups, Chat, Profile)
-        // are now handled *inside* the NavHost within MainScreen.
-        // composable(BottomNavItem.Profile.route) { ... } // REMOVE from here
+        // Note: Routes for individual tabs (Home content, Groups list, Chat list, Profile view/edit)
+        // are defined within the NavHost *inside* the MainScreen composable.
     }
 }

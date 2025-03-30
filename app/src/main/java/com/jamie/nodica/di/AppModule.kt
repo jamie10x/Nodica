@@ -1,4 +1,3 @@
-// main/java/com/jamie/nodica/di/AppModule.kt
 package com.jamie.nodica.di
 
 import com.jamie.nodica.features.auth.AuthViewModel
@@ -20,70 +19,78 @@ import com.jamie.nodica.features.profile.ProfileViewModel
 import com.jamie.nodica.features.profile_management.ProfileManagementViewModel
 import com.jamie.nodica.features.splash.SplashViewModel
 import com.jamie.nodica.supabase.provideSupabaseClient
-import io.github.jan.supabase.SupabaseClient
-import io.github.jan.supabase.auth.auth
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
+import timber.log.Timber
+
 
 val appModule = module {
-    // Supabase Client
+    // --- Supabase Client ---
+    // Provided once for the entire application lifecycle.
     single { provideSupabaseClient(get()) }
 
-    // --- Use Cases ---
-    single<GroupUseCase> { GroupUseCaseImpl(get<GroupRepository>()) }
-    single<UserGroupUseCase> { UserGroupUseCaseImpl(get<GroupRepository>()) }
-    single<MessageUseCase> { MessageUseCaseImpl(get<MessageRepository>()) }
     // --- Repositories ---
-    single<GroupRepository> { SupabaseGroupRepository(get()) }
-    single<MessageRepository> { SupabaseMessageRepository(get()) }
+    // Singletons as they typically hold no state specific to a feature instance.
+    // They depend on the singleton SupabaseClient.
+    single<GroupRepository> { SupabaseGroupRepository(supabaseClient = get()) }
+    single<MessageRepository> { SupabaseMessageRepository(client = get()) }
+
+    // --- Use Cases ---
+    // Singletons as they are usually stateless intermediaries.
+    // They depend on singleton Repositories.
+    single<GroupUseCase> { GroupUseCaseImpl(repository = get()) }
+    single<UserGroupUseCase> { UserGroupUseCaseImpl(repository = get()) }
+    single<MessageUseCase> { MessageUseCaseImpl(repository = get()) }
 
     // --- ViewModels ---
-    viewModel { AuthViewModel(get()) }
-    viewModel { SplashViewModel(get()) }
-    viewModel { ProfileViewModel(get()) }
+    // Use Koin's `viewModel` scope for Android ViewModels.
+    // ViewModels should fetch user ID internally when needed, not during DI setup.
 
+    viewModel { SplashViewModel(supabase = get()) }
+    viewModel { AuthViewModel(supabase = get()) }
+
+    // ProfileViewModel for initial profile setup logic
+    viewModel { ProfileViewModel(supabase = get()) }
+
+    // ProfileManagementViewModel for editing existing profile
     viewModel {
-        val client = get<SupabaseClient>()
-        val userId = client.auth.currentUserOrNull()?.id
-            ?: throw IllegalStateException("User must be logged in for Profile Management")
-        ProfileManagementViewModel(get(), currentUserId = userId)
+        // Inject SupabaseClient, ViewModel will get userId from it
+        ProfileManagementViewModel(supabase = get())
     }
 
+    // UserGroupsViewModel for displaying user's joined groups
     viewModel {
-        val client = get<SupabaseClient>()
-        val userId = client.auth.currentUserOrNull()?.id
-            ?: throw IllegalStateException("User must be logged in for User Groups")
-        UserGroupsViewModel(get<UserGroupUseCase>(), currentUserId = userId)
+        // Inject UserGroupUseCase and SupabaseClient (for userId)
+        UserGroupsViewModel(userGroupUseCase = get(), supabaseClient = get())
     }
 
+    // DiscoverGroupViewModel for discovering new groups
     viewModel {
-        val client = get<SupabaseClient>()
-        val userId = client.auth.currentUserOrNull()?.id
-            ?: throw IllegalStateException("User must be logged in for Discover")
+        // Inject necessary UseCases and SupabaseClient (for userId)
         DiscoverGroupViewModel(
-            groupUseCase = get<GroupUseCase>(),
-            userGroupUseCase = get<UserGroupUseCase>(),
-            currentUserId = userId
+            groupUseCase = get(),
+            userGroupUseCase = get(),
+            supabaseClient = get() // Inject client
         )
     }
 
-    // FIX: Inject SupabaseClient needed for tag fetching
+    // CreateGroupViewModel for the group creation form
     viewModel {
-        val client = get<SupabaseClient>()
-        val userId = client.auth.currentUserOrNull()?.id
-            ?: throw IllegalStateException("User must be logged in to Create Group")
+        // Inject GroupUseCase and SupabaseClient (for userId and tag fetching)
         CreateGroupViewModel(
-            groupUseCase = get<GroupUseCase>(),
-            supabaseClient = get<SupabaseClient>(), // Inject client
-            currentUserId = userId
+            groupUseCase = get(),
+            supabaseClient = get() // Inject client
         )
     }
 
-    viewModel { (currentUserId: String, groupId: String) ->
+    // MessageViewModel requires runtime parameters (groupId)
+    // currentUserId will be fetched internally now.
+    viewModel { (groupId: String) -> // Parameter is just groupId
+        Timber.d("Koin providing MessageViewModel for groupId: $groupId")
         MessageViewModel(
-            messageUseCase = get<MessageUseCase>(),
-            supabaseClient = get<SupabaseClient>(),
-            currentUserId = currentUserId,
+            messageUseCase = get(),
+            supabaseClient = get(), // Inject client for Realtime and userId
+            // Remove currentUserId parameter from injection
             groupId = groupId
         )
     }

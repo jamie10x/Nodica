@@ -73,6 +73,7 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     debugImplementation(libs.androidx.ui.tooling)
     implementation(libs.androidx.material) // Check for latest 1.x version
+    implementation (libs.androidx.foundation)
 
 
     // Lifecycle + ViewModel
