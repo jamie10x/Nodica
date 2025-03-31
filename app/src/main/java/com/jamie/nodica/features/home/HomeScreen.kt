@@ -9,7 +9,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Label // AutoMirrored icon
-import androidx.compose.material.icons.filled.* // Import common icons like Search, Clear
+import androidx.compose.material.icons.filled.* // Import common icons like Search, Clear, SearchOff, ErrorOutline
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -38,7 +38,7 @@ fun HomeScreen(outerNavController: NavHostController) {
     val uiState by groupViewModel.uiState.collectAsState()
 
     // Extract states for readability
-    val availableGroups = uiState.availableGroups // Use the filtered list
+    val availableGroups = uiState.availableGroups // Use the filtered list (groups not joined)
     val isLoading = uiState.isLoading
     val isJoining = uiState.isJoining // General joining indicator
     val joiningGroupId = uiState.joiningGroupId // Specific group being joined
@@ -65,16 +65,13 @@ fun HomeScreen(outerNavController: NavHostController) {
         }
     }
 
-    // Optional: Effect to fetch data when the screen becomes visible or upon parameter change
-    // LaunchedEffect(Unit) { groupViewModel.refreshDiscover() } // Example: Refresh on first composition
-
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Discover Study Groups") }
                 // Optional: Add refresh action? Usually search implies refresh
-                //actions = { IconButton(onClick = { groupViewModel.refreshDiscover() }, enabled = !isLoading) { Icon(Icons.Default.Refresh, "Refresh") }}
+                // actions = { IconButton(onClick = { groupViewModel.refreshDiscover() }, enabled = !isLoading) { Icon(Icons.Default.Refresh, "Refresh") }}
             )
         }
     ) { padding ->
@@ -82,7 +79,8 @@ fun HomeScreen(outerNavController: NavHostController) {
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
-                .clickable(onClick = { focusManager.clearFocus() }, enabled=true) // Click outside fields to dismiss keyboard
+                // Click outside text fields to dismiss keyboard
+                .clickable(onClick = { focusManager.clearFocus() }, enabled = true, onClickLabel = null)
         ) {
             // --- Search and Filter Area ---
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -134,23 +132,22 @@ fun HomeScreen(outerNavController: NavHostController) {
             // --- Content Area: Loading, Empty, Error, or List ---
             Box(modifier = Modifier.weight(1f)) { // Takes remaining space
                 when {
-                    // 1. Loading State
-                    isLoading -> {
+                    // 1. Loading State (Show only when list is still empty)
+                    isLoading && availableGroups.isEmpty() -> {
                         Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
                     }
-                    // 2. Error State (and no groups previously loaded)
+                    // 2. Error State (Show only when list is still empty)
                     error != null && availableGroups.isEmpty() -> {
-                        // Use a generic ErrorState composable if available
-                        ErrorStateDiscover( // Or define locally
+                        ErrorStateDiscover(
                             message = error,
                             onRetry = { groupViewModel.refreshDiscover() } // Retry refreshes all
                         )
                     }
-                    // 3. Empty State (Loaded successfully, no results matching filters/available)
-                    availableGroups.isEmpty() -> {
-                        EmptyStateDiscover() // Or define locally
+                    // 3. Empty State (Show if not loading and list is empty)
+                    availableGroups.isEmpty() && !isLoading -> {
+                        EmptyStateDiscover() // Show empty state
                     }
-                    // 4. Groups List
+                    // 4. Groups List (Show available groups to join)
                     else -> {
                         LazyColumn(
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
@@ -163,10 +160,10 @@ fun HomeScreen(outerNavController: NavHostController) {
 
                                 GroupItem(
                                     group = group,
-                                    joined = false, // These are groups NOT yet joined
-                                    onActionClicked = { groupViewModel.joinGroup(group.id) },
-                                    actionTextOverride = "Join Group",
-                                    isActionInProgress = isJoiningThisGroup // Pass joining state
+                                    joined = false, // Always false for discover screen items
+                                    onActionClicked = { groupViewModel.joinGroup(group.id) }, // Action is always join
+                                    actionTextOverride = "Join Group", // Button text is always "Join Group"
+                                    isActionInProgress = isJoiningThisGroup // Pass joining state for this specific item
                                 )
                             }
                         } // End LazyColumn
@@ -178,7 +175,7 @@ fun HomeScreen(outerNavController: NavHostController) {
 }
 
 
-// --- Helper Composables for Discover Screen States (can be extracted) ---
+// --- Helper Composables for Discover Screen States ---
 
 @Composable
 private fun EmptyStateDiscover(modifier: Modifier = Modifier) {
@@ -235,7 +232,8 @@ private fun ErrorStateDiscover(modifier: Modifier = Modifier, message: String, o
                 text = message,
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onErrorContainer // Or onSurfaceVariant
+                // Consider color contrast for error messages
+                color = MaterialTheme.colorScheme.error // Or onErrorContainer if on error container background
             )
             Spacer(Modifier.height(24.dp))
             Button(onClick = onRetry) {

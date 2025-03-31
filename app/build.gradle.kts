@@ -63,6 +63,9 @@ dependencies {
     implementation(libs.storage.kt)
     implementation(libs.gotrue.kt)
 
+    implementation(libs.ktor.client.okhttp)
+
+
     // Compose
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.navigation.compose)

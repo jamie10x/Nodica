@@ -26,17 +26,22 @@ class GroupUseCaseImpl(private val repository: GroupRepository) : GroupUseCase {
     override suspend fun createGroup(group: Group, tagIds: List<String>): Result<Group> {
         val trimmedName = group.name.trim()
         if (trimmedName.isBlank()) {
+            Timber.e("UseCase: createGroup validation failed - Group name is blank.")
             return Result.failure(IllegalArgumentException("Group name cannot be blank."))
         }
+        // Ensure creatorId is present before passing to repository
         if (group.creatorId.isBlank()) {
+            Timber.e("UseCase: createGroup validation failed - Creator ID is blank.")
             return Result.failure(IllegalStateException("Group creator ID is missing."))
         }
 
+        Timber.d("UseCase: Calling repository.createGroup for name='${group.name}', creator='${group.creatorId}'")
         val groupToCreate = group.copy(
             name = trimmedName,
             description = group.description.trim(),
             meetingSchedule = group.meetingSchedule?.trim()?.ifBlank { null }
         )
+        // Delegate to repository, passing the validated Group object and distinct tag IDs
         return repository.createGroup(groupToCreate, tagIds.distinct())
     }
 }

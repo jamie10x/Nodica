@@ -61,6 +61,9 @@ class CreateGroupViewModel(
                     )
                 } else it
             }
+        } else if (_uiState.value.error == "Authentication error.") {
+            // Clear auth error if user is now logged in
+            _uiState.update { it.copy(error = null)}
         }
         return userId
     }
@@ -130,18 +133,18 @@ class CreateGroupViewModel(
 
         // Update state to show creation is in progress
         _uiState.update { it.copy(opState = CreateGroupOpState.Loading, error = null) }
+        // Log the user ID being used for creation
         Timber.d("Attempting to create group. Name: $trimmedName, Tags: $selectedTagIds, Creator: $currentUserId")
 
         createGroupJob = viewModelScope.launch {
             // Prepare the Group object stub for the use case
-            // Use dummy/default values for fields set by DB/RPC
             val newGroupData = Group(
                 id = "", // Ignored by UseCase/Repo create
                 name = trimmedName,
                 description = description.trim(),
                 meetingSchedule = meetingSchedule.trim().ifBlank { null },
-                creatorId = currentUserId, // Essential: MUST be the logged-in user
-                createdAt = kotlinx.datetime.Clock.System.now(), // Placeholder, DB will set actual time
+                creatorId = currentUserId, // Ensure this is correctly passed
+                createdAt = kotlinx.datetime.Clock.System.now(), // Placeholder
                 tags = emptyList(), // Ignored
                 membersRelation = emptyList() // Ignored
             )
@@ -150,7 +153,8 @@ class CreateGroupViewModel(
             groupUseCase.createGroup(newGroupData, selectedTagIds.distinct()).fold(
                 onSuccess = { createdGroup ->
                     if (!isActive) return@fold
-                    Timber.i("Group created successfully via UseCase: ${createdGroup.id}")
+                    // Log the ID of the successfully created group
+                    Timber.i("Group created successfully via UseCase: ID=${createdGroup.id}, Name='${createdGroup.name}'")
                     _uiState.update { it.copy(opState = CreateGroupOpState.Success(createdGroup)) }
                 },
                 onFailure = { error ->

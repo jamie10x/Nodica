@@ -26,6 +26,7 @@ import androidx.navigation.NavController
 import com.jamie.nodica.features.navigation.Routes
 import kotlinx.coroutines.launch
 import com.jamie.nodica.R
+import timber.log.Timber // Make sure Timber is imported
 
 @Composable
 fun SignInScreen(
@@ -51,13 +52,20 @@ fun SignInScreen(
     LaunchedEffect(state) {
         when (state) {
             is AuthUiState.Success -> {
-                // Always navigate to Profile Setup after successful sign-in/sign-up
-                // The ProfileSetupScreen/ViewModel will handle redirecting to Home if setup is not needed.
-                navController.navigate(Routes.PROFILE_SETUP) {
+                // --- MODIFICATION START ---
+                // Navigate back to SPLASH after successful sign-in.
+                // SplashViewModel will re-evaluate the auth/profile state
+                // and navigate to the correct destination (ProfileSetup or Home).
+                // This centralizes the routing logic post-authentication.
+                Timber.i("SignInScreen: Auth Successful. Navigating back to SPLASH to re-evaluate destination.")
+                navController.navigate(Routes.SPLASH) {
+                    // Clear the auth flow stack (Onboarding, Auth, SignIn)
                     popUpTo(navController.graph.startDestinationId) { inclusive = true }
                     launchSingleTop = true
                 }
-                viewModel.resetState() // Move reset *after* successful navigation trigger
+                // Resetting AuthViewModel state after triggering navigation is usually fine.
+                viewModel.resetState()
+                // --- MODIFICATION END ---
             }
             is AuthUiState.Error -> {
                 scope.launch {
@@ -182,6 +190,7 @@ fun SignInScreen(
             } else {
                 val googleIcon = painterResource(id = R.drawable.google_icon)
                 Icon(painter = googleIcon, contentDescription = "Google logo", modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.width(8.dp)) // Add spacing between icon and text
                 Text("Sign In with Google")
             }
         }

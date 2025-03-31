@@ -21,7 +21,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
-import com.jamie.nodica.features.groups.user_group.UserGroupsViewModel
+import com.jamie.nodica.features.groups.user_group.UserGroupsViewModel // Correct ViewModel import
 import com.jamie.nodica.features.navigation.Routes
 import com.jamie.nodica.ui.theme.NodicaTheme
 import kotlinx.coroutines.launch
@@ -30,13 +30,13 @@ import org.koin.androidx.compose.koinViewModel
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterialApi::class)
 @Composable
 fun GroupsScreen(outerNavController: NavHostController) {
-    // Use koinViewModel to inject the ViewModel
+    // Use the correct ViewModel for fetching joined groups
     val userGroupsViewModel: UserGroupsViewModel = koinViewModel()
     // Collect the state from the ViewModel
     val uiState by userGroupsViewModel.uiState.collectAsState()
 
     // Extract state properties for readability
-    val userGroups = uiState.groups
+    val userGroups = uiState.groups       // These are the joined groups
     val isLoading = uiState.isLoading       // True during initial data load attempt
     val isRefreshing = uiState.isRefreshing // True during pull-to-refresh action
     val error = uiState.error
@@ -45,7 +45,7 @@ fun GroupsScreen(outerNavController: NavHostController) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val pullRefreshState = rememberPullRefreshState(
-        refreshing = isRefreshing, // Bind pull-to-refresh state to ViewModel's isRefreshing
+        refreshing = isRefreshing, // Bind pull-to-refresh state
         onRefresh = { userGroupsViewModel.refresh() } // Call ViewModel's refresh function
     )
 
@@ -67,14 +67,11 @@ fun GroupsScreen(outerNavController: NavHostController) {
         topBar = {
             TopAppBar(
                 title = { Text("My Groups") }
-                // Optional: Add refresh action icon button here
-                // actions = { IconButton(onClick = { userGroupsViewModel.refresh() }, enabled = !isRefreshing) { Icon(Icons.Default.Refresh, "Refresh") } }
             )
         },
         floatingActionButton = {
-            // FAB should generally be visible unless in a critical error state?
-            // Or hide during initial load? Let's show unless critical error.
-            if (error == null || !isLoading) { // Show if no error OR not initial loading
+            // Show FAB unless loading initially or in critical error state
+            if (!isLoading && error == null) {
                 FloatingActionButton(
                     onClick = { outerNavController.navigate(Routes.CREATE_GROUP) },
                 ) {
@@ -85,9 +82,9 @@ fun GroupsScreen(outerNavController: NavHostController) {
     ) { paddingValues ->
         Box(
             modifier = Modifier
-                .padding(paddingValues) // Apply padding from Scaffold (for top bar etc.)
+                .padding(paddingValues) // Apply padding from Scaffold
                 .fillMaxSize()
-                .pullRefresh(pullRefreshState) // Enable pull-to-refresh on the Box
+                .pullRefresh(pullRefreshState) // Enable pull-to-refresh
         ) {
             // --- Content Display Logic ---
             when {
@@ -98,7 +95,7 @@ fun GroupsScreen(outerNavController: NavHostController) {
                     }
                 }
 
-                // 2. Error State (if groups list is potentially empty)
+                // 2. Error State (Show if error occurred and list is empty)
                 error != null && userGroups.isEmpty() -> {
                     ErrorState(
                         message = error,
@@ -106,15 +103,15 @@ fun GroupsScreen(outerNavController: NavHostController) {
                     )
                 }
 
-                // 3. Empty State (Loaded successfully, but no groups joined)
-                userGroups.isEmpty() && !isRefreshing -> { // Make sure not to show during refresh
+                // 3. Empty State (Show if loaded, not refreshing, and list is empty)
+                userGroups.isEmpty() && !isLoading && !isRefreshing -> {
                     EmptyState(
                         message = "You haven't joined any groups yet.",
                         details = "Join groups from the 'Discover' tab or create your own using the '+' button."
                     )
                 }
 
-                // 4. Groups List (Data available)
+                // 4. Groups List (Show joined groups)
                 else -> {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
@@ -124,13 +121,13 @@ fun GroupsScreen(outerNavController: NavHostController) {
                         items(userGroups, key = { group -> group.id }) { group ->
                             GroupItem(
                                 group = group,
-                                joined = true, // These are definitely joined groups
+                                joined = true, // Always true for this screen
+                                // Action navigates to the specific chat screen
                                 onActionClicked = {
-                                    // Navigate to the specific chat screen for this group
                                     outerNavController.navigate("${Routes.MESSAGES}/${group.id}")
                                 },
-                                // actionTextOverride = "Open Chat" // Optional override
-                                // isActionInProgress = false // Not applicable here usually
+                                actionTextOverride = "Open Chat", // Button text is always "Open Chat"
+                                isActionInProgress = false // No async action needed for navigation
                             )
                         }
                     }
@@ -148,7 +145,7 @@ fun GroupsScreen(outerNavController: NavHostController) {
     } // End Scaffold
 }
 
-// --- Reusable Helper Composables for States ---
+// --- Reusable Helper Composables for States (ensure these are defined) ---
 
 @Composable
 private fun EmptyState(modifier: Modifier = Modifier, message: String, details: String? = null) {
@@ -158,15 +155,15 @@ private fun EmptyState(modifier: Modifier = Modifier, message: String, details: 
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
-                Icons.Default.Groups, // More relevant icon
+                Icons.Default.Groups, // Relevant icon
                 contentDescription = null, // Decorative
                 modifier = Modifier.size(64.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f) // Muted tint
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
             )
             Spacer(Modifier.height(16.dp))
             Text(
                 text = message,
-                style = MaterialTheme.typography.titleLarge, // Larger title
+                style = MaterialTheme.typography.titleLarge,
                 textAlign = TextAlign.Center
             )
             if (details != null) {
@@ -193,7 +190,7 @@ private fun ErrorState(modifier: Modifier = Modifier, message: String, onRetry: 
                 Icons.Default.CloudOff, // Error icon
                 contentDescription = null,
                 modifier = Modifier.size(64.dp),
-                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f) // Error tint
+                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
             )
             Spacer(Modifier.height(16.dp))
             Text(
@@ -207,7 +204,7 @@ private fun ErrorState(modifier: Modifier = Modifier, message: String, onRetry: 
                 text = message, // Specific error message
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onErrorContainer // More contrast if on error container bg
+                color = MaterialTheme.colorScheme.error // Keep error color for message too
             )
             Spacer(Modifier.height(24.dp))
             Button(onClick = onRetry) {
@@ -223,7 +220,6 @@ private fun ErrorState(modifier: Modifier = Modifier, message: String, onRetry: 
 @Composable
 fun GroupsScreenPreview() {
     NodicaTheme {
-        // In a real app, you might use a fake ViewModel for previews
         GroupsScreen(rememberNavController())
     }
 }

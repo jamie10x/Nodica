@@ -7,20 +7,27 @@ import io.github.jan.supabase.annotations.SupabaseInternal
 import io.github.jan.supabase.exceptions.HttpRequestException
 import io.github.jan.supabase.exceptions.RestException
 import io.github.jan.supabase.postgrest.postgrest
-import io.github.jan.supabase.postgrest.query.* // Import specific builders if needed
+import io.github.jan.supabase.postgrest.query.*
 import io.github.jan.supabase.supabaseJson
-import kotlinx.serialization.json.Json
+import kotlinx.coroutines.delay
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
-import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.JsonObject // Import JsonObject for declaration
 import timber.log.Timber
 
+
+// Ignore warning about constructor parameter if needed:
+// @Suppress("UNUSED_PARAMETER")
 class SupabaseGroupRepository(
-    private val supabaseClient: SupabaseClient,
+    private val supabaseClient: SupabaseClient, // Parameter used to initialize 'db'
 ) : GroupRepository {
 
+    // Initialize PostgREST client from SupabaseClient
     private val db = supabaseClient.postgrest
 
     override suspend fun fetchDiscoverGroups(searchQuery: String, tagQuery: String): List<Group> {
@@ -43,10 +50,7 @@ class SupabaseGroupRepository(
                 limit(50)
             }.decodeList<Group>()
         } catch (e: RestException) {
-            Timber.e(
-                e,
-                "Repo: RestException fetching discover groups. Code: ${e.statusCode}, Msg: ${e.message}"
-            )
+            Timber.e(e, "Repo: RestException fetching discover groups. Code: ${e.statusCode}, Msg: ${e.message}")
             throw Exception("Database error fetching groups: ${e.description ?: e.message}")
         } catch (e: Exception) {
             Timber.e(e, "Repo: Generic error fetching discover groups: ${e.message}")
@@ -54,6 +58,7 @@ class SupabaseGroupRepository(
         }
     }
 
+    // --- REFINED fetchUserGroups ---
     override suspend fun fetchUserGroups(userId: String): List<Group> {
         Timber.d("Repo: Fetching groups for user: $userId")
         if (userId.isBlank()) {
@@ -61,36 +66,44 @@ class SupabaseGroupRepository(
             return emptyList()
         }
 
-        val selectQuery = "*, member_count:group_members(count), tags:group_tags(tags(name))"
-        // *** Define the related table for filtering ***
-        val relatedTable = "group_members"
+        // Refined Select Query using INNER JOIN alias for filtering
+        val selectQuery = """
+            *,
+            member_count:group_members(count),
+            tags:group_tags(tags(name)),
+            user_membership:group_members!inner(user_id)
+        """.trimIndent() // Alias the inner join used for filtering
 
         return try {
-            db.from("groups") // Still select FROM groups
+            db.from("groups")
                 .select(columns = Columns.raw(selectQuery)) {
+                    // Filter based on the aliased inner join result
                     filter {
-                        // *** MODIFIED FILTER: Specify related table and column ***
-                        // Use 'cs' (contains) or 'eq' on the related table directly.
-                        // Requires an INNER join hint ('!inner') to ensure groups without matching members are excluded.
-                        // This syntax might be more explicitly understood by PostgREST/library.
-                        eq("$relatedTable.user_id", userId) // Filter WHERE group_members.user_id = userId
-                        // Add '!inner' hint IF NEEDED for filtering. The select implies the join,
-                        // but sometimes the filter needs the hint too. Let's try without first.
-                        // Example with hint if needed: eq("$relatedTable!inner.user_id", userId)
+                        eq("user_membership.user_id", userId)
                     }
-                    order("name", Order.ASCENDING)
-                }.decodeList<Group>() // Decode directly into List<Group>
+                    order("name", Order.ASCENDING) // Order alphabetically
+                }.decodeList<Group>() // Decode should ignore the extra 'user_membership' field
         } catch (e: RestException) {
-            Timber.e(
-                e,
-                "Repo: RestException fetching user groups for user $userId. Code: ${e.statusCode}, Desc: ${e.description}, Msg: ${e.message}"
-            )
-            throw Exception("Database error loading your groups: ${e.description ?: e.message}")
-        } catch (e: Exception) {
+            Timber.e(e, "Repo: RestException fetching user groups for user $userId. Code: ${e.statusCode}, Desc: ${e.description}, Msg: ${e.message}")
+            // Check specifically for the column error again
+            if (e.message?.contains("column groups.group_members does not exist", ignoreCase=true) == true ||
+                e.message?.contains("column groups.user_membership does not exist", ignoreCase=true) == true ||
+                e.message?.contains("missing FROM-clause entry for table", ignoreCase=true) == true ) { // Add check for join errors
+                Timber.e("Repo: Query structure likely incorrect for fetching user groups. Check select/filter logic for joins.")
+                throw Exception("Database query error loading your groups. Please contact support.") // More specific internal error
+            } else {
+                throw Exception("Database error loading your groups: ${e.description ?: e.message}")
+            }
+        } catch (e: HttpRequestException) {
+            Timber.e(e, "Repo: Network error fetching user groups for $userId.")
+            throw Exception("Network error loading your groups.")
+        } catch (e: Exception) { // Catch other potential errors like Serialization
             Timber.e(e, "Repo: Generic error fetching user groups for user $userId: ${e.message}")
             throw Exception("Could not load your groups: ${e.message}")
         }
     }
+    // --- END REFINED fetchUserGroups ---
+
 
     override suspend fun joinGroup(groupId: String, userId: String): Result<Unit> {
         Timber.d("Repo: User $userId attempting to join group $groupId")
@@ -99,7 +112,6 @@ class SupabaseGroupRepository(
         }
 
         return try {
-            // 1. Check if already a member using countOrNull()
             val existingCount = db.from("group_members")
                 .select {
                     filter {
@@ -107,34 +119,36 @@ class SupabaseGroupRepository(
                         eq("user_id", userId)
                     }
                     count(Count.EXACT)
-                    limit(0) // Don't need rows
+                    limit(0)
                 }
-                .countOrNull() // Extracts count from headers
+                .countOrNull()
 
             when {
                 existingCount == null -> {
-                    Timber.w("Repo: Could not verify existing membership for user $userId in group $groupId. Assuming not joined.")
-                    // Decide whether to proceed or return an error. Proceeding might be okay if insert handles duplicates.
+                    Timber.e("Repo: Failed to verify existing membership for user $userId in group $groupId due to count error.")
+                    return Result.failure(Exception("Could not verify group membership status."))
                 }
-
                 existingCount > 0 -> {
-                    Timber.w("User $userId already a member of group $groupId")
+                    Timber.w("User $userId already a member of group $groupId. Join skipped.")
                     return Result.failure(AlreadyJoinedException("You are already a member of this group."))
+                }
+                else -> {
+                    Timber.d("User $userId is not a member of group $groupId. Proceeding with join.")
                 }
             }
 
-            // 2. Insert membership record
             val insertData = mapOf("user_id" to userId, "group_id" to groupId)
             db.from("group_members").insert(insertData)
 
-            Timber.i("User $userId successfully joined group $groupId")
+            Timber.i("User $userId successfully joined group $groupId (or DB handled duplicate).")
             Result.success(Unit)
 
         } catch (e: RestException) {
-            Timber.e(
-                e,
-                "Repo: DB RestException joining group $groupId for user $userId. Code: ${e.statusCode}, Desc: ${e.description}"
-            )
+            Timber.e(e, "Repo: DB RestException joining group $groupId for user $userId. Code: ${e.statusCode}, Desc: ${e.description}")
+            if (e.message?.contains("duplicate key value violates unique constraint", ignoreCase = true) == true) {
+                Timber.w("Repo: Duplicate key violation during join, likely already a member.")
+                return Result.failure(AlreadyJoinedException("You are already a member of this group."))
+            }
             Result.failure(Exception("Database error joining group: ${e.description ?: e.message}"))
         } catch (e: HttpRequestException) {
             Timber.e(e, "Repo: Network error joining group $groupId for user $userId.")
@@ -145,57 +159,77 @@ class SupabaseGroupRepository(
         }
     }
 
+
     @OptIn(SupabaseInternal::class)
     override suspend fun createGroup(group: Group, tagIds: List<String>): Result<Group> {
-        Timber.d("Repo: Calling create_group_and_add_tags RPC. Name='${group.name}', Creator='${group.creatorId}', Tags='${tagIds}'")
-        if (group.name.isBlank() || group.creatorId.isBlank()) {
+        val creatorId = group.creatorId
+        Timber.d("Repo: Calling create_group_and_add_tags RPC. Name='${group.name}', Creator='$creatorId', Tags='${tagIds}'")
+        if (group.name.isBlank() || creatorId.isBlank()) {
             return Result.failure(IllegalArgumentException("Group name and creator ID are required for RPC call."))
         }
 
+        val rpcFunctionName = "create_group_and_add_tags"
+        var rpcParams: JsonObject? = null
+
         return try {
-            val rpcParams = buildJsonObject {
+            rpcParams = buildJsonObject {
                 put("p_name", group.name)
-                put("p_description", group.description.ifBlank { null }) // Send null if blank
-                put(
-                    "p_meeting_schedule",
-                    group.meetingSchedule?.ifBlank { null }) // Send null if blank
-                put("p_creator_id", group.creatorId)
-                // Assuming RPC p_tag_ids argument is of type uuid[] or text[] expecting JSON format
-                put("p_tag_ids", Json.encodeToString(tagIds.distinct())) // Check RPC signature
+                put("p_description", group.description.ifBlank { null })
+                put("p_meeting_schedule", group.meetingSchedule?.ifBlank { null })
+                put("p_creator_id", creatorId)
+                put("p_tag_ids", buildJsonArray {
+                    tagIds.distinct().forEach { tagId -> add(tagId) }
+                })
             }
-            Timber.v("Repo: RPC Params: $rpcParams")
+            Timber.i("Repo: Calling RPC '$rpcFunctionName' with params: $rpcParams")
 
-            val result = db.rpc("create_group_and_add_tags", rpcParams)
-            Timber.v("Repo: RPC Result Data: ${result.data}")
+            val result = db.rpc(rpcFunctionName, rpcParams)
+            Timber.i("Repo: RPC '$rpcFunctionName' executed. Response data: ${result.data}")
 
-            // Adjust parsing based on expected RPC return value (e.g., the new UUID string)
             val resultBody = supabaseJson.parseToJsonElement(result.data)
-            val newGroupId = resultBody.jsonPrimitive.contentOrNull // Assuming direct UUID return
-                ?: resultBody.jsonObject["new_group_id"]?.jsonPrimitive?.contentOrNull // If returned in object
-                ?: throw Exception("RPC 'create_group_and_add_tags' did not return the new group ID. Response: ${result.data}")
+            val newGroupId = resultBody.jsonPrimitive.contentOrNull
+                ?: resultBody.jsonObject["new_group_id"]?.jsonPrimitive?.contentOrNull
+                ?: throw Exception("RPC '$rpcFunctionName' did not return the new group ID in expected format. Response: ${result.data}")
 
-            Timber.i("Repo: Group created via RPC with ID: $newGroupId. Adding delay before fetch...")
-            kotlinx.coroutines.delay(500) // Add 500ms delay - REMOVE FOR PRODUCTION LATER
+            Timber.i("Repo: Group created via RPC with ID: $newGroupId.")
 
+            val fetchDelay = 300L
+            Timber.d("Repo: Adding ${fetchDelay}ms delay before fetching created group details...")
+            delay(fetchDelay)
+
+            Timber.d("Repo: Fetching full details for newly created group ID: $newGroupId")
             val finalGroup = fetchGroupById(newGroupId)
                 ?: throw Exception("Failed to fetch group details (ID: $newGroupId) after RPC creation.")
 
+            Timber.i("Repo: Successfully fetched details for created group: ${finalGroup.name}")
             Result.success(finalGroup)
 
         } catch (e: RestException) {
-            Timber.e(
-                e,
-                "Repo: DB RestException calling RPC. Code: ${e.statusCode}, Desc: ${e.description}"
-            )
-            Result.failure(Exception("Database error creating group: ${e.description ?: e.message}"))
+            val overloadErrorMsg = "function overloading can be resolved"
+            val functionNotFoundMsg = "function ${rpcFunctionName} does not exist"
+            when {
+                e.message?.contains(overloadErrorMsg, ignoreCase = true) == true -> {
+                    Timber.e(e, "Repo: RPC Overload Resolution Error for '$rpcFunctionName'. CHECK SQL FUNCTION SIGNATURE AND PARAMETER TYPES! Parameters Sent: $rpcParams")
+                    Result.failure(Exception("Database error: Parameter mismatch for group creation function. Please verify database setup."))
+                }
+                e.message?.contains(functionNotFoundMsg, ignoreCase = true) == true -> {
+                    Timber.e(e, "Repo: RPC function '$rpcFunctionName' not found in database. CHECK FUNCTION NAME AND SCHEMA!")
+                    Result.failure(Exception("Database error: Group creation function not found."))
+                }
+                else -> {
+                    Timber.e(e, "Repo: DB RestException calling RPC '$rpcFunctionName'. Code: ${e.statusCode}, Desc: ${e.description}, Message: ${e.message}")
+                    Result.failure(Exception("Database error creating group: ${e.description ?: e.message}"))
+                }
+            }
         } catch (e: HttpRequestException) {
-            Timber.e(e, "Repo: Network error calling RPC.")
+            Timber.e(e, "Repo: Network error calling RPC '$rpcFunctionName'.")
             Result.failure(Exception("Network error. Could not create group."))
         } catch (e: Exception) {
-            Timber.e(e, "Repo: Generic error creating group via RPC '${group.name}': ${e.message}")
-            Result.failure(Exception("Error creating group: ${e.message}"))
+            Timber.e(e, "Repo: Generic error creating group via RPC '${group.name}': $e.message")
+            Result.failure(Exception("Error creating group: $e.message"))
         }
     }
+
 
     override suspend fun fetchGroupById(groupId: String): Group? {
         Timber.d("Repo: Fetching group by ID: $groupId")
@@ -206,15 +240,12 @@ class SupabaseGroupRepository(
         val selectQuery = "*, member_count:group_members(count), tags:group_tags(tags(name))"
         return try {
             db.from("groups")
-                .select(Columns.raw(selectQuery)) {
+                .select(columns = Columns.raw(selectQuery)) {
                     filter { eq("id", groupId) }
                     limit(1)
                 }.decodeSingleOrNull<Group>()
         } catch (e: RestException) {
-            Timber.e(
-                e,
-                "Repo: RestException fetching group by ID $groupId. Code: ${e.statusCode}, Msg: ${e.message}"
-            )
+            Timber.e(e, "Repo: RestException fetching group by ID $groupId. Code: ${e.statusCode}, Msg: ${e.message}")
             null
         } catch (e: Exception) {
             Timber.e(e, "Repo: Generic error fetching group by ID $groupId: ${e.message}")
@@ -222,16 +253,17 @@ class SupabaseGroupRepository(
         }
     }
 
+
     override suspend fun fetchAllTags(): List<TagItem> {
         Timber.d("Repo: Fetching all tags")
         return try {
             db.from("tags").select().decodeList<TagItem>()
         } catch (e: RestException) {
-            Timber.e(
-                e,
-                "Repo: RestException fetching all tags. Code: ${e.statusCode}, Desc: ${e.description}"
-            )
+            Timber.e(e, "Repo: RestException fetching all tags. Code: ${e.statusCode}, Desc: ${e.description}")
             throw Exception("Database error loading tags: ${e.description ?: e.message}")
+        } catch (e: HttpRequestException) {
+            Timber.e(e, "Repo: Network error fetching tags.")
+            throw Exception("Network error loading tags.")
         } catch (e: Exception) {
             Timber.e(e, "Repo: Generic error fetching all tags: ${e.message}")
             throw Exception("Could not load tags: ${e.message}")

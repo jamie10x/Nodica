@@ -9,6 +9,7 @@ import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.storage.Storage
 import io.github.jan.supabase.serializer.KotlinXSerializer
+import io.ktor.client.engine.okhttp.OkHttp
 import kotlinx.serialization.json.Json
 import timber.log.Timber
 
@@ -65,6 +66,15 @@ fun provideSupabaseClient(context: Context): SupabaseClient {
             isLenient = true // Allows slightly non-standard JSON, use cautiously
         })
         Timber.v("Supabase KotlinXSerializer configured.")
+
+        httpEngine = OkHttp.create {
+            // You can add OkHttp specific configurations here if needed, e.g.:
+            // config {
+            //     retryOnConnectionFailure(true)
+            //     connectTimeout(15, TimeUnit.SECONDS) // Example
+            // }
+            Timber.v("Using OkHttp engine for Supabase client.")
+        }
 
         // Consider adding further configuration here if needed, e.g., custom headers
         // httpConfig { // Example
