@@ -19,6 +19,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.JsonObject // Import JsonObject for declaration
 import timber.log.Timber
+import kotlin.text.get
 
 
 // Ignore warning about constructor parameter if needed:
@@ -174,8 +175,8 @@ class SupabaseGroupRepository(
         return try {
             rpcParams = buildJsonObject {
                 put("p_name", group.name)
-                put("p_description", group.description.ifBlank { null })
-                put("p_meeting_schedule", group.meetingSchedule?.ifBlank { null })
+                put("p_description", group.description.takeIf { it.isNotBlank() }) // Changed
+                put("p_meeting_schedule", group.meetingSchedule?.takeIf { it.isNotBlank() }) // Changed
                 put("p_creator_id", creatorId)
                 put("p_tag_ids", buildJsonArray {
                     tagIds.distinct().forEach { tagId -> add(tagId) }
@@ -187,9 +188,8 @@ class SupabaseGroupRepository(
             Timber.i("Repo: RPC '$rpcFunctionName' executed. Response data: ${result.data}")
 
             val resultBody = supabaseJson.parseToJsonElement(result.data)
-            val newGroupId = resultBody.jsonPrimitive.contentOrNull
-                ?: resultBody.jsonObject["new_group_id"]?.jsonPrimitive?.contentOrNull
-                ?: throw Exception("RPC '$rpcFunctionName' did not return the new group ID in expected format. Response: ${result.data}")
+            val newGroupId =  resultBody.jsonObject["new_group_id"]?.jsonPrimitive?.contentOrNull // Changed
+                ?: throw Exception("RPC '$rpcFunctionName' did not return the new group ID in expected format. Response: ${result.data}") // Changed
 
             Timber.i("Repo: Group created via RPC with ID: $newGroupId.")
 
@@ -206,7 +206,7 @@ class SupabaseGroupRepository(
 
         } catch (e: RestException) {
             val overloadErrorMsg = "function overloading can be resolved"
-            val functionNotFoundMsg = "function ${rpcFunctionName} does not exist"
+            val functionNotFoundMsg = "function $rpcFunctionName does not exist"
             when {
                 e.message?.contains(overloadErrorMsg, ignoreCase = true) == true -> {
                     Timber.e(e, "Repo: RPC Overload Resolution Error for '$rpcFunctionName'. CHECK SQL FUNCTION SIGNATURE AND PARAMETER TYPES! Parameters Sent: $rpcParams")
@@ -215,6 +215,11 @@ class SupabaseGroupRepository(
                 e.message?.contains(functionNotFoundMsg, ignoreCase = true) == true -> {
                     Timber.e(e, "Repo: RPC function '$rpcFunctionName' not found in database. CHECK FUNCTION NAME AND SCHEMA!")
                     Result.failure(Exception("Database error: Group creation function not found."))
+                }
+                // Added this block
+                e.message?.contains("violates check constraint", ignoreCase = true) == true -> {
+                    Timber.e(e, "Repo: DB Check Constraint Violation calling RPC '$rpcFunctionName'. Parameters Sent: $rpcParams")
+                    Result.failure(Exception("Database error: Invalid data provided for group creation. Please check your inputs."))
                 }
                 else -> {
                     Timber.e(e, "Repo: DB RestException calling RPC '$rpcFunctionName'. Code: ${e.statusCode}, Desc: ${e.description}, Message: ${e.message}")
